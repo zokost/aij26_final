@@ -91,20 +91,26 @@ class Predictor:
         self.net.load_state_dict(saved["model"], strict=True)
         del saved
         self.net.cuda().eval()
-        self.mean, self.std = np.asarray(MEAN, np.float32), np.asarray(STD, np.float32)
 
     @torch.inference_mode()
     def __call__(self, paths):
-        images, sizes = [], []
-        for path in paths:
-            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            if image is None:
-                raise FileNotFoundError(path)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            sizes.append(image.shape[:2])
-            image = cv2.resize(image, (self.size, self.size), interpolation=cv2.INTER_AREA)
-            image = (image.astype(np.float32) / 255. - self.mean) / self.std
-            images.append(torch.from_numpy(image.transpose(2, 0, 1)))
-        logits = self.net(torch.stack(images).cuda(non_blocking=True))
-        return [F.interpolate(logits[i:i + 1].float(), size, mode="bilinear", align_corners=False)
-                .sigmoid()[0, 0].cpu().numpy() for i, size in enumerate(sizes)]
+        return probabilities(self.net, paths, self.size)
+
+
+@torch.inference_mode()
+def probabilities(net, paths, size):
+    """Shared FP32 preprocessing and native-resolution prediction for evaluation/inference."""
+    images, sizes = [], []
+    mean, std = np.asarray(MEAN, np.float32), np.asarray(STD, np.float32)
+    for path in paths:
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None:
+            raise FileNotFoundError(path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        sizes.append(image.shape[:2])
+        image = cv2.resize(image, (size, size), interpolation=cv2.INTER_AREA)
+        image = (image.astype(np.float32) / 255. - mean) / std
+        images.append(torch.from_numpy(image.transpose(2, 0, 1)))
+    logits = net(torch.stack(images).to(next(net.parameters()).device, non_blocking=True))
+    return [F.interpolate(logits[i:i + 1].float(), shape, mode="bilinear", align_corners=False)
+            .sigmoid()[0, 0].cpu().numpy() for i, shape in enumerate(sizes)]

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from common import Loss, seed
 from .runtime import COLUMNS, Images, companions, model, read_rows, worker_seed
+from .validate import DEFAULT_CSV, check_disjoint, evaluate_nb, validation_rows
 
 
 def epoch_frame(base, manifests, root, epoch, teacher, fold):
@@ -33,6 +34,7 @@ def main():
     parser.add_argument("--fold", type=int, choices=range(3), default=0)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--stop-epoch", type=int)
+    parser.add_argument("--nb-val-csv", type=Path, default=DEFAULT_CSV)
     args = parser.parse_args()
     seed()
     torch.set_num_threads(4)
@@ -51,6 +53,7 @@ def main():
     del saved
     seed()
     base = read_rows(args.manifests / "stage2_train.csv", args.root)[COLUMNS]
+    validation = validation_rows(args.nb_val_csv, args.root)
     if len(base) != 19837:
         raise ValueError("Expected the fixed 19837-row stage2 training split")
     dataset = Images(epoch_frame(base, args.manifests, args.root, 1, teacher, args.fold), size, soft=not teacher)
@@ -90,6 +93,7 @@ def main():
                decoder_channels=None if teacher else 320, img_size=size, squish=True)
     for epoch in range(start, stop + 1):
         dataset.frame = epoch_frame(base, args.manifests, args.root, epoch, teacher, args.fold).reset_index(drop=True)
+        check_disjoint(validation, dataset.frame)
         net.train()
         total_loss, count = 0., 0
         optimizer.zero_grad(set_to_none=True)
@@ -104,7 +108,9 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             total_loss += float(loss.detach()) * len(images)
             count += len(images)
-        history.append(dict(epoch=epoch, loss=total_loss / count))
+        # Validation is deterministic, uses FP32 and does not choose the fixed final epoch.
+        nb = evaluate_nb(net, validation, size)
+        history.append(dict(epoch=epoch, loss=total_loss / count, nb=nb))
         compact = dict(model=net.state_dict(), cfg=cfg, epoch=epoch, phase=args.phase, fold=args.fold)
         torch.save(compact, args.out / f"epoch{epoch}.pt")
         compact.update(optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict(), history=history,
