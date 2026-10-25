@@ -12,7 +12,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from common import MEAN, STD, model, seed
+from common import MEAN, STD, seed
+from .common import model
 
 CANVASES = ((832, 608), (704, 704), (608, 832))
 LOG_ASPECTS = np.log([w / h for h, w in CANVASES])

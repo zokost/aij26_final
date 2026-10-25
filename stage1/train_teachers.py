@@ -11,7 +11,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from common import Images, Loss, frames, seed, validation_batch
+from common import Loss, seed
+from .common import Images, frames, validation_batch
 
 THRESHOLDS = (.05, .10, .15, .20, .25, .30, .35, .40, .45, .50, .55,
               .60, .65, .70, .75, .80, .85, .90, .95, .97, .99)

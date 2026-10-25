@@ -12,7 +12,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from common import Images, Loss, evaluate, frames, model, seed, validation_batch
+from common import Loss, seed
+from .common import Images, evaluate, frames, model, validation_batch
 
 
 def main():
@@ -26,7 +27,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if int(os.environ.get("WORLD_SIZE", "1")) != 2:
-        parser.error("Use python -m torch.distributed.run --nproc_per_node=2 train.py ...")
+        parser.error("Use python -m torch.distributed.run --nproc_per_node=2 --module stage1.train ...")
     local = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local)
     dist.init_process_group("nccl")
