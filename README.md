@@ -2,8 +2,13 @@
 
 Сегментация локальных ИИ-изменений на фотографиях. Основное решение финального
 этапа — **KDALL**: одна модель SegFormer MiT-B2 с декодером шириной 320,
-вход 640×640, веса эпохи 32, порог 0.75, FP32-инференс без TTA.
-Результат посылки №113: public AIC **0.822791**; нагрузка — **93.097 GFLOPs**.
+вход 640×640, веса эпохи32, FP32-инференс без TTA.
+Текущая посылка **№116** добавляет адаптивное понижение порога0.75→0.70/0.60/0.50:
+public AIC **0.826555**. Модель с pooling — **93.116 GFLOPs**; полная задержка
+с CPU-калибровкой на H100 ещё не измерена.
+
+[Новая калибровка](stage2/CALIBRATION.md): алгоритм, признаки, обучение,
+артефакты, происхождение выбора и ограничения оценки.
 
 | Каталог | Содержимое | Инструкция |
 |---|---|---|
@@ -37,10 +42,11 @@ pip install -r requirements.txt
 ```
 
 Для инференса готовой финальной модели поместите исходные веса KDALL эпохи 32
-в `weights/KDALL_epoch32.pt`:
+в `weights/KDALL_epoch32.pt`, а два калибровочных артефакта —
+в `weights/calibration116/` (перечень и SHA256 в описании калибровки):
 
 ```bash
-python -m stage2.infer --checkpoint weights/KDALL_epoch32.pt --root data/test_stage2 --csv data/test_stage2/test.csv --out work/submission_stage2
+python -m stage2.infer_calibrated --checkpoint weights/KDALL_epoch32.pt --calibration weights/calibration116 --root data/test_stage2 --csv data/test_stage2/test.csv --out work/submission_stage2
 ```
 
 Результат — `work/submission_stage2/submission.zip`: CSV и отдельные одноканальные
