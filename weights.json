@@ -1,0 +1,40 @@
+{
+  "files": [
+    {
+      "file": "stage1_final_avg5.pt",
+      "bytes": 97686727,
+      "sha256": "90e3ad1116bfdb39c9cbba32262708b21b236fb7d60b92b5c53bae30c108cf8f",
+      "purpose": "first-stage final SegFormer checkpoint"
+    },
+    {
+      "file": "FULL2_late_avg5.pt",
+      "bytes": 96891511,
+      "sha256": "3c7dca5f8ee775d8f917a0d8f8c5cb2964a30abbdc9419f29ca03779f3335e8b",
+      "purpose": "MiT-B2 encoder initialization for stage two; mean of FULL2 epochs156-160"
+    },
+    {
+      "file": "DIAG_teacher_fold0of3_cnxl_832_e40.pt",
+      "bytes": 832905327,
+      "sha256": "1b11a3600ff9a773301747fd29d81c92d01b1d41d282e72455c682b4bdde7b64",
+      "purpose": "stage-one ConvNeXt-L DINOv3 / UPerNet, fold0, stage-two teacher initialization",
+      "fold": 0,
+      "best_epoch": 37
+    },
+    {
+      "file": "DIAG_teacher_fold1of3_cnxl_832_e40.pt",
+      "bytes": 832905327,
+      "sha256": "4793b0adde78532a3606abb9ecbf3806b0dff1c54bf4e06a7a4180318668f373",
+      "purpose": "stage-one ConvNeXt-L DINOv3 / UPerNet, fold1, stage-two teacher initialization",
+      "fold": 1,
+      "best_epoch": 36
+    },
+    {
+      "file": "DIAG_teacher_fold2of3_cnxl_832_e40.pt",
+      "bytes": 832905327,
+      "sha256": "cfc36bebcd9bcef3b0bca64c66ce78d2d65811bfb29722bdf3122a63732565f6",
+      "purpose": "stage-one ConvNeXt-L DINOv3 / UPerNet, fold2, stage-two teacher initialization",
+      "fold": 2,
+      "best_epoch": 38
+    }
+  ]
+}

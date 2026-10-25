@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 data/
 work/
+weights/
 *.pt
 *.pth
 *.safetensors

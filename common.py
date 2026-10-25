@@ -33,7 +33,7 @@ def model(pretrained=False):
                          in_channels=3, classes=1, decoder_segmentation_channels=128)
 
 
-def frames(root):
+def frames(root, val_fraction=.03):
     """Preserve the original CSV ordering, clean-source sampling and split."""
     frame = pd.read_csv(Path(root) / "train.csv")
     for column in ("orgl_img_path", "chng_img_path", "gt_path"):
@@ -49,7 +49,7 @@ def frames(root):
     groups = np.where(~frame.orgl_img_path.isin(["", "nan"]), frame.orgl_img_path,
                       np.where(~frame.gt_path.isin(["", "nan"]), frame.gt_path,
                                "solo_" + frame.index.astype(str)))
-    train, val = next(GroupShuffleSplit(n_splits=1, test_size=.03, random_state=42).split(frame, groups=groups))
+    train, val = next(GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=42).split(frame, groups=groups))
     return frame.iloc[train].copy(), frame.iloc[val].copy()
 
 
@@ -71,12 +71,12 @@ def read_pair(root, row):
 
 
 class Images(Dataset):
-    def __init__(self, frame, root, training):
+    def __init__(self, frame, root, training, size=704):
         self.frame, self.root, self.training = frame, Path(root), training
-        operations = [A.Resize(704, 704, interpolation=cv2.INTER_AREA),
-                      A.PadIfNeeded(704, 704, position="top_left", border_mode=cv2.BORDER_CONSTANT,
-                                    fill=0, fill_mask=0), A.RandomCrop(704, 704)] if training else [
-                                        A.Resize(704, 704, interpolation=cv2.INTER_AREA)]
+        operations = [A.Resize(size, size, interpolation=cv2.INTER_AREA),
+                      A.PadIfNeeded(size, size, position="top_left", border_mode=cv2.BORDER_CONSTANT,
+                                    fill=0, fill_mask=0), A.RandomCrop(size, size)] if training else [
+                                        A.Resize(size, size, interpolation=cv2.INTER_AREA)]
         if training:
             operations += [A.HorizontalFlip(p=.5), A.VerticalFlip(p=.2), A.RandomRotate90(p=.5),
                            A.RandomBrightnessContrast(brightness_limit=.15, contrast_limit=.15, p=.3),
@@ -98,12 +98,17 @@ def validation_batch(batch):
 
 
 class Loss(torch.nn.Module):
+    def __init__(self, tversky_beta=.7, positive_balance=True):
+        super().__init__()
+        self.beta, self.positive_balance = tversky_beta, positive_balance
+
     def forward(self, logits, target):
         dims = (1, 2, 3)
         fraction = target.mean(dims).clamp_min(1e-6)
         positive_weight = (((1 - fraction) / fraction).clamp(max=200) ** .5).view(-1, 1, 1, 1)
         weights = 1 + target * (positive_weight - 1)
-        bce = (F.binary_cross_entropy_with_logits(logits, target, reduction="none") * weights).sum() / weights.sum()
+        bce_map = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        bce = (bce_map * weights).sum() / weights.sum() if self.positive_balance else bce_map.mean()
         probability = logits.sigmoid()
         positive = target.sum(dims) > 0
         positive_loss = logits.sum() * 0.
@@ -111,7 +116,12 @@ class Loss(torch.nn.Module):
             tp = (probability * target).sum(dims)[positive]
             fp = (probability * (1 - target)).sum(dims)[positive]
             fn = ((1 - probability) * target).sum(dims)[positive]
-            positive_loss = 1 - ((tp + 1e-7) / (tp + .3 * fp + .7 * fn + 1e-7)).mean()
+            if self.beta is None:
+                denominator = (probability.sum(dims) + target.sum(dims))[positive]
+                positive_loss = 1 - ((2 * tp + 1e-7) / (denominator + 1e-7)).mean()
+            else:
+                positive_loss = 1 - ((tp + 1e-7) /
+                                     (tp + (1 - self.beta) * fp + self.beta * fn + 1e-7)).mean()
         negative_loss = probability.mean(dims)[~positive].mean() if bool((~positive).any()) else logits.sum() * 0.
         fraction = positive.float().mean()
         return .5 * bce + .5 * (fraction * positive_loss + (1 - fraction) * negative_loss)
