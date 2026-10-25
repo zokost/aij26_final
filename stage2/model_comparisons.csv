@@ -1,0 +1,5 @@
+group,experiment,architecture,description,threshold,n_pairs,nb_dice,nb_fpr,nb_aic,public_lb
+teacher_student,NC11_KDALL_minaug_s42_e40,MiT-B2 / SegFormer320,KDALL student: stage2 + soft NB; epoch32,0.75,550,0.5812514343230398,0.025454545454545455,0.7281875254031629,0.8227913217182447
+teacher_student,TCNX_cf0_of3_832_e12,ConvNeXt-L DINOv3 / UPerNet,"cross-fit teacher fold0, NB subset + stage2; 12 epochs",0.75,550,0.6156466342210397,0.005454545454545455,0.7605161718808265,
+matched_size,GE_A_B1_matchedS1e4_H3_e16,MiT-B1 / SegFormer320,"stage1, matched 4 epochs; stage2 16 epochs",0.75,550,0.19951182027464134,0.3709090909090909,0.3029463165950667,
+matched_size,GE_A_B2_matchedS1e4_H3_e16,MiT-B2 / SegFormer320,"stage1, matched 4 epochs; stage2 16 epochs",0.75,550,0.17138875894260863,0.2690909090909091,0.2776679607767403,

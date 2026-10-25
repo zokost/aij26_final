@@ -1,0 +1,14 @@
+{
+  "defaults": {"schedule_epochs": 4, "final_epoch": 4},
+  "variants": [
+    {"name": "kdall_control", "overrides": {}},
+    {"name": "lr3e-5", "overrides": {"lr": 0.00003}},
+    {"name": "encoder_lr001", "overrides": {"encoder_lr_mult": 0.01}},
+    {"name": "tversky05", "overrides": {"tversky_beta": 0.5}},
+    {"name": "dice", "overrides": {"tversky_beta": null}},
+    {"name": "forensic_aug", "overrides": {"augmentation": "forensic"}},
+    {"name": "decoder256", "overrides": {"decoder_channels": 256}},
+    {"name": "imagenet_b2", "overrides": {"initialization": "imagenet"}},
+    {"name": "imagenet_b1", "overrides": {"initialization": "imagenet", "encoder": "mit_b1"}}
+  ]
+}

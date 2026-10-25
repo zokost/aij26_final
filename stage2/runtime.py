@@ -3,7 +3,6 @@ import os
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 from pathlib import Path
-import random
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
@@ -15,17 +14,17 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-from common import MEAN, STD, seed
+from common import MEAN, STD, seed, worker_seed
 
 COLUMNS = ["orgl_img_path", "chng_img_path", "gt_path"]
 
 
-def model(teacher=False):
+def model(teacher=False, encoder="mit_b2", decoder_channels=320, pretrained=False):
     if teacher:
         return smp.UPerNet(encoder_name="tu-convnext_large.dinov3_lvd1689m",
                            encoder_weights=None, in_channels=3, classes=1)
-    return smp.Segformer(encoder_name="mit_b2", encoder_weights=None, in_channels=3,
-                         classes=1, decoder_segmentation_channels=320)
+    return smp.Segformer(encoder_name=encoder, encoder_weights="imagenet" if pretrained else None,
+                         in_channels=3, classes=1, decoder_segmentation_channels=decoder_channels)
 
 
 def read_rows(path, root):
@@ -41,16 +40,27 @@ def companions(frame):
 
 
 class Images(Dataset):
-    def __init__(self, frame, size, soft):
+    def __init__(self, frame, size, soft, augmentation="minimal", seed_value=42):
         self.frame, self.soft = frame.reset_index(drop=True), soft
-        self.transform = A.Compose([
+        if augmentation not in ("minimal", "forensic"):
+            raise ValueError(augmentation)
+        operations = [
             A.Resize(size, size, interpolation=cv2.INTER_AREA),
             A.PadIfNeeded(size, size, position="top_left", border_mode=cv2.BORDER_CONSTANT,
                           fill=0, fill_mask=0), A.RandomCrop(size, size),
             A.HorizontalFlip(p=.5), A.VerticalFlip(p=.2),
-            A.ImageCompression(quality_range=(90, 100), p=.2),
-            A.Normalize(mean=MEAN, std=STD), ToTensorV2()])
-        self.transform.set_random_seed(42)
+            A.ImageCompression(quality_range=(90, 100), p=.2)]
+        if augmentation == "forensic":
+            # Acquisition/redistribution perturbations: resize, blur and recompression.
+            # Photometric operations change the image only; geometric transforms
+            # apply the same mapping to image and fractional segmentation target.
+            operations += [A.OneOf([
+                A.Downscale(scale_range=(.5, .9), interpolation_pair={
+                    "downscale": cv2.INTER_AREA, "upscale": cv2.INTER_LINEAR}, p=1),
+                A.GaussianBlur(blur_limit=(3, 5), p=1)], p=.2),
+                A.ImageCompression(quality_range=(60, 95), p=.2)]
+        self.transform = A.Compose(operations + [A.Normalize(mean=MEAN, std=STD), ToTensorV2()])
+        self.transform.set_random_seed(seed_value)
 
     def __len__(self):
         return len(self.frame)
@@ -73,13 +83,6 @@ class Images(Dataset):
         return result["image"], result["mask"].float().unsqueeze(0)
 
 
-def worker_seed(worker_id):
-    value = torch.initial_seed() % 2**32
-    random.seed(value)
-    np.random.seed(value)
-    torch.utils.data.get_worker_info().dataset.transform.set_random_seed(value)
-
-
 class Predictor:
     def __init__(self, checkpoint):
         seed()
@@ -87,7 +90,9 @@ class Predictor:
         torch.use_deterministic_algorithms(True)
         saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
         self.size = int(saved["cfg"]["img_size"])
-        self.net = model(saved["cfg"]["arch"] == "upernet")
+        cfg = saved["cfg"]
+        self.net = model(cfg["arch"] == "upernet", encoder=cfg.get("encoder", "mit_b2"),
+                         decoder_channels=cfg.get("decoder_channels", 320))
         self.net.load_state_dict(saved["model"], strict=True)
         del saved
         self.net.cuda().eval()

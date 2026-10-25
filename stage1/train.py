@@ -12,7 +12,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from common import Loss, seed
+from common import Loss, seed, worker_seed
 from .common import Images, evaluate, frames, model, validation_batch
 
 
@@ -49,9 +49,11 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=2, rank=rank, seed=0 if base else 42,
                                  shuffle=True, drop_last=True)
     loader = DataLoader(dataset, batch_size=batch, sampler=sampler, drop_last=True,
-                        num_workers=args.workers, pin_memory=True, persistent_workers=args.workers > 0)
+                        num_workers=args.workers, pin_memory=True, persistent_workers=args.workers > 0,
+                        worker_init_fn=worker_seed)
     validation = DataLoader(Images(val, args.data, training=False), batch_size=batch,
-                            num_workers=args.workers, pin_memory=True, collate_fn=validation_batch) if base else None
+                            num_workers=args.workers, pin_memory=True, collate_fn=validation_batch,
+                            worker_init_fn=worker_seed) if base else None
     if not base and len(loader) != 1728:
         raise ValueError("Expected 1728 optimizer steps per full-data epoch")
     net = model(pretrained=base).to(device)

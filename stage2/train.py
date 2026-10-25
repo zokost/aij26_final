@@ -1,7 +1,9 @@
 """Train a cross-fit teacher or the fixed KDALL student recipe."""
 import argparse
+import hashlib
 import json
 import math
+import platform
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +13,7 @@ from torch.utils.data import DataLoader
 from common import Loss, seed
 from .runtime import COLUMNS, Images, companions, model, read_rows, worker_seed
 from .validate import DEFAULT_CSV, check_disjoint, evaluate_nb, validation_rows
+from .recipe import DEFAULT, load as load_recipe
 
 
 def epoch_frame(base, manifests, root, epoch, teacher, fold):
@@ -29,55 +32,78 @@ def main():
     parser.add_argument("phase", choices=["teacher", "student"])
     parser.add_argument("--root", type=Path, default=Path("data"))
     parser.add_argument("--manifests", type=Path, required=True)
-    parser.add_argument("--initial", type=Path, required=True)
+    parser.add_argument("--initial", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--fold", type=int, choices=range(3), default=0)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--stop-epoch", type=int)
     parser.add_argument("--nb-val-csv", type=Path, default=DEFAULT_CSV)
+    parser.add_argument("--recipe", type=Path, help="Student research overrides; omitted = fixed KDALL")
     args = parser.parse_args()
-    seed()
+    recipe = load_recipe(args.recipe)
+    seed(recipe["seed"])
     torch.set_num_threads(4)
     teacher = args.phase == "teacher"
-    size, batch, workers, schedule, final = (832, 6, 10, 12, 12) if teacher else (640, 18, 8, 40, 32)
+    if teacher and args.recipe:
+        parser.error("Research overrides apply to students only")
+    pretrained = not teacher and recipe["initialization"] == "imagenet"
+    if not pretrained and args.initial is None:
+        parser.error("Checkpoint initialization requires --initial")
+    if pretrained and args.initial is not None:
+        parser.error("ImageNet initialization must not also supply --initial")
+    size, batch, workers, schedule, final = (832, 6, 10, 12, 12) if teacher else (
+        recipe["img_size"], recipe["batch"], 8, recipe["schedule_epochs"], recipe["final_epoch"])
     stop = final if args.stop_epoch is None else args.stop_epoch
     if not 1 <= stop <= schedule:
         parser.error("stop-epoch is outside the fixed LR schedule")
-    net = model(teacher)
-    saved = torch.load(args.initial, map_location="cpu", weights_only=False, mmap=True)
-    if teacher:
-        net.load_state_dict(saved["model"], strict=True)
+    net = model(teacher, recipe["encoder"], recipe["decoder_channels"], pretrained)
+    if pretrained:
+        # B1/B2 have the same feature-channel interface. Copy a common, independently
+        # seeded head so encoder size cannot change decoder initialization via RNG use.
+        seed(recipe["seed"])
+        reference = model(decoder_channels=recipe["decoder_channels"])
+        net.decoder.load_state_dict(reference.decoder.state_dict(), strict=True)
+        net.segmentation_head.load_state_dict(reference.segmentation_head.state_dict(), strict=True)
+        del reference
     else:
-        torch.nn.Module.load_state_dict(net.encoder, {k[len("encoder."):]: v for k, v in saved["model"].items()
-                                                      if k.startswith("encoder.")}, strict=True)
-    del saved
-    seed()
+        saved = torch.load(args.initial, map_location="cpu", weights_only=False, mmap=True)
+        if teacher:
+            net.load_state_dict(saved["model"], strict=True)
+        else:
+            # A new decoder is intentional: transfer only the stage-one representation.
+            torch.nn.Module.load_state_dict(net.encoder, {k[len("encoder."):]: v for k, v in saved["model"].items()
+                                                          if k.startswith("encoder.")}, strict=True)
+        del saved
+    seed(recipe["seed"])
     base = read_rows(args.manifests / "stage2_train.csv", args.root)[COLUMNS]
     validation = validation_rows(args.nb_val_csv, args.root)
     if len(base) != 19837:
         raise ValueError("Expected the fixed 19837-row stage2 training split")
-    dataset = Images(epoch_frame(base, args.manifests, args.root, 1, teacher, args.fold), size, soft=not teacher)
-    generator = torch.Generator().manual_seed(42)
+    dataset = Images(epoch_frame(base, args.manifests, args.root, 1, teacher, args.fold), size, soft=not teacher,
+                     augmentation=recipe["augmentation"], seed_value=recipe["seed"])
+    generator = torch.Generator().manual_seed(recipe["seed"])
     loader = DataLoader(dataset, batch_size=batch, shuffle=True, drop_last=True, num_workers=workers,
                         pin_memory=True, worker_init_fn=worker_seed, generator=generator,
                         persistent_workers=False)
-    if not teacher and len(loader) != 1324:
+    if not teacher and recipe["batch"] == 18 and len(loader) != 1324:
         raise ValueError("Expected 1324 student optimizer steps per epoch")
     net.cuda()
     encoder_ids = {id(p) for p in net.encoder.parameters()}
     optimizer = torch.optim.AdamW([
-        {"params": [p for p in net.parameters() if id(p) in encoder_ids], "lr": 1e-5},
-        {"params": [p for p in net.parameters() if id(p) not in encoder_ids], "lr": 1e-4}], weight_decay=1e-4)
+        {"params": [p for p in net.parameters() if id(p) in encoder_ids], "lr": recipe["lr"] * recipe["encoder_lr_mult"]},
+        {"params": [p for p in net.parameters() if id(p) not in encoder_ids], "lr": recipe["lr"]}], weight_decay=1e-4)
     total, warmup = schedule * len(loader), max(1, int(schedule * len(loader) * .05))
     def factor(step):
         return step / warmup if step < warmup else .5 * (1 + math.cos(math.pi * (step - warmup) / (total - warmup)))
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
-    criterion = Loss()
+    criterion = Loss(tversky_beta=recipe["tversky_beta"], positive_balance=recipe["positive_balance"])
     history, start = [], 1
     if args.resume:
         saved = torch.load(args.out / "last.pt", map_location="cpu", weights_only=False)
         if saved["phase"] != args.phase or saved["fold"] != args.fold:
             raise ValueError("Resume recipe differs")
+        if saved.get("recipe", None if teacher else DEFAULT) != (None if teacher else recipe):
+            raise ValueError("Cannot resume with different research hyperparameters")
         net.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
@@ -88,9 +114,25 @@ def main():
         del saved
     else:
         args.out.mkdir(parents=True, exist_ok=False)
+    # File hashes and versions make a run auditable without embedding data or weights.
+    manifest_paths = [args.manifests / "stage2_train.csv", args.nb_val_csv]
+    manifest_paths += ([args.manifests / f"teacher_extra{args.fold}.csv"] if teacher else
+                       [args.manifests / f"epoch{e:02d}.csv" for e in range(1, schedule + 1)])
+    hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in manifest_paths}
+    metadata = dict(recipe=None if teacher else recipe, manifests=hashes,
+                    python=platform.python_version(), torch=torch.__version__, cuda=torch.version.cuda,
+                    steps_per_epoch=len(loader), validation_threshold=.75,
+                    initialization=str(args.initial) if args.initial else "ImageNet via SMP")
+    metadata_path = args.out / "run.json"
+    if args.resume and metadata_path.exists():
+        previous = json.loads(metadata_path.read_text())
+        if previous["manifests"] != hashes:
+            raise ValueError("Cannot resume with modified data/validation manifests")
+    else:
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     cfg = dict(arch="upernet" if teacher else "segformer",
-               encoder="tu-convnext_large.dinov3_lvd1689m" if teacher else "mit_b2",
-               decoder_channels=None if teacher else 320, img_size=size, squish=True)
+               encoder="tu-convnext_large.dinov3_lvd1689m" if teacher else recipe["encoder"],
+               decoder_channels=None if teacher else recipe["decoder_channels"], img_size=size, squish=True)
     for epoch in range(start, stop + 1):
         dataset.frame = epoch_frame(base, args.manifests, args.root, epoch, teacher, args.fold).reset_index(drop=True)
         check_disjoint(validation, dataset.frame)
@@ -110,8 +152,10 @@ def main():
             count += len(images)
         # Validation is deterministic, uses FP32 and does not choose the fixed final epoch.
         nb = evaluate_nb(net, validation, size)
-        history.append(dict(epoch=epoch, loss=total_loss / count, nb=nb))
-        compact = dict(model=net.state_dict(), cfg=cfg, epoch=epoch, phase=args.phase, fold=args.fold)
+        history.append(dict(epoch=epoch, loss=total_loss / count, nb=nb,
+                            learning_rates=scheduler.get_last_lr()))
+        compact = dict(model=net.state_dict(), cfg=cfg, epoch=epoch, phase=args.phase, fold=args.fold,
+                       recipe=None if teacher else recipe)
         torch.save(compact, args.out / f"epoch{epoch}.pt")
         compact.update(optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict(), history=history,
                        generator=generator.get_state(), rng_cpu=torch.get_rng_state(), rng_cuda=torch.cuda.get_rng_state())

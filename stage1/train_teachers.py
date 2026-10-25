@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from common import Loss, seed
+from common import Loss, seed, worker_seed
 from .common import Images, frames, validation_batch
 
 THRESHOLDS = (.05, .10, .15, .20, .25, .30, .35, .40, .45, .50, .55,
@@ -96,9 +96,10 @@ def main():
     print(json.dumps(dict(fold=args.fold, train=len(train), heldout=len(held), validation=len(val))), flush=True)
     loader = DataLoader(Images(train, args.data, True, size=832), batch_size=6, shuffle=True,
                         drop_last=True, num_workers=args.workers, pin_memory=True,
-                        persistent_workers=args.workers > 0)
+                        persistent_workers=args.workers > 0, worker_init_fn=worker_seed)
     validation = DataLoader(Images(val, args.data, False, size=832), batch_size=6,
-                            num_workers=args.workers, pin_memory=True, collate_fn=validation_batch)
+                            num_workers=args.workers, pin_memory=True, collate_fn=validation_batch,
+                            worker_init_fn=worker_seed)
     net = teacher(pretrained=not args.resume).cuda()
     encoder_ids = {id(param) for param in net.encoder.parameters()}
     optimizer = torch.optim.AdamW([

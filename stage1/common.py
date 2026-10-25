@@ -71,6 +71,7 @@ class Images(Dataset):
                            A.RandomBrightnessContrast(brightness_limit=.15, contrast_limit=.15, p=.3),
                            A.HueSaturationValue(hue_shift_limit=8, sat_shift_limit=15, val_shift_limit=8, p=.2)]
         self.transform = A.Compose(operations + [A.Normalize(mean=MEAN, std=STD), ToTensorV2()])
+        self.transform.set_random_seed(42)
 
     def __len__(self):
         return len(self.frame)

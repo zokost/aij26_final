@@ -40,8 +40,8 @@ def check_disjoint(validation, training):
 
 def evaluate_nb(net, frame, size, threshold=.75, batch_size=4):
     """Mean per-image positive Dice and image-level FPR at >=1% predicted area."""
-    if not 0 < threshold < 1 or batch_size < 1:
-        raise ValueError("Expected threshold in (0, 1) and positive batch size")
+    if frame.empty or not 0 < threshold < 1 or batch_size < 1:
+        raise ValueError("Expected nonempty NB frame, threshold in (0, 1) and positive batch size")
     dice, alarms = [], []
     training = net.training
     net.eval()
@@ -51,6 +51,8 @@ def evaluate_nb(net, frame, size, threshold=.75, batch_size=4):
             edits = probabilities(net, chunk.chng_img_path.tolist(), size)
             originals = probabilities(net, chunk.orgl_img_path.tolist(), size)
             for row, edit, original in zip(chunk.itertuples(), edits, originals):
+                if not np.isfinite(edit).all() or not np.isfinite(original).all():
+                    raise FloatingPointError(f"Non-finite NB prediction: {row.chng_img_path}")
                 mask = cv2.imread(row.gt_path, cv2.IMREAD_GRAYSCALE)
                 if mask is None:
                     raise FileNotFoundError(row.gt_path)

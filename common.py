@@ -12,17 +12,32 @@ cv2.setNumThreads(0)
 MEAN, STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 
 
-def seed():
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
+def seed(value=42):
+    """Seed data sampling, model initialization and CUDA without enabling autotuning."""
+    random.seed(value)
+    np.random.seed(value)
+    torch.manual_seed(value)
+    torch.cuda.manual_seed_all(value)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
 
+def worker_seed(worker_id):
+    """Give each loader worker reproducible Python, NumPy and augmentation RNGs."""
+    value = torch.initial_seed() % 2**32
+    random.seed(value)
+    np.random.seed(value)
+    torch.utils.data.get_worker_info().dataset.transform.set_random_seed(value)
+
+
 
 class Loss(torch.nn.Module):
+    """Pixel-balanced BCE plus per-image overlap loss; empty targets penalize area.
+
+    Tversky beta>0.5 increases the cost of missed changed pixels. Keeping empty
+    images in a separate branch avoids treating their undefined overlap as Dice.
+    Fractional targets are supported for the NB probability maps.
+    """
     def __init__(self, tversky_beta=.7, positive_balance=True):
         super().__init__()
         self.beta, self.positive_balance = tversky_beta, positive_balance
@@ -30,6 +45,7 @@ class Loss(torch.nn.Module):
     def forward(self, logits, target):
         dims = (1, 2, 3)
         fraction = target.mean(dims).clamp_min(1e-6)
+        # Bound the inverse-area weight so tiny edits cannot dominate a batch.
         positive_weight = (((1 - fraction) / fraction).clamp(max=200) ** .5).view(-1, 1, 1, 1)
         weights = 1 + target * (positive_weight - 1)
         bce_map = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
