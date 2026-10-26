@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Цифровой детектив</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --surface:#ffffff; --line:#e3e6ea;
+    --ink:#14161a; --ink2:#5b6470; --ink3:#8b95a1;
+    --ok:#1f8a4c; --bad:#c0392b; --accent:#2f6fdb;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#111316; --surface:#191c20; --line:#2a2f36;
+      --ink:#e9ecef; --ink2:#a7b0bb; --ink3:#78828e;
+      --ok:#48c07d; --bad:#ef6a5a; --accent:#6aa0ff;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:28px 16px 56px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--ink2);margin:0 0 22px;font-size:14px}
+  .drop{border:1.5px dashed var(--line);border-radius:12px;background:var(--surface);
+        padding:34px 20px;text-align:center;cursor:pointer;transition:border-color .15s}
+  .drop:hover,.drop.over{border-color:var(--accent)}
+  .drop b{display:block;margin-bottom:6px}
+  .drop span{color:var(--ink3);font-size:13px}
+  input[type=file]{display:none}
+  .verdict{display:none;margin-top:22px;background:var(--surface);border:1px solid var(--line);
+           border-radius:12px;overflow:hidden}
+  .head{display:flex;align-items:center;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line);
+        flex-wrap:wrap}
+  .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .title{font-weight:600}
+  .chips{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap;color:var(--ink2);font-size:13px}
+  .chips b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:600}
+  .view{padding:18px;display:grid;gap:16px;grid-template-columns:1fr}
+  @media(min-width:760px){.view{grid-template-columns:1fr 280px}}
+  canvas{width:100%;height:auto;display:block;border-radius:8px;border:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--ink3);font-weight:500;padding:5px 6px;border-bottom:1px solid var(--line)}
+  td{padding:5px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .muted{color:var(--ink2);font-size:13px;margin:10px 0 0}
+  .err{color:var(--bad);margin-top:14px}
+  label.sw{display:flex;align-items:center;gap:8px;color:var(--ink2);font-size:13px;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Цифровой детектив</h1>
+  <p class="sub">Сегментация областей, изменённых генеративными моделями. SegFormer MiT-B2, вход по пропорциям кадра, порог 0.70.</p>
+
+  <label class="drop" id="drop">
+    <b>Перетащите изображение или нажмите</b>
+    <span>JPEG, PNG, WebP. Один кадр за раз.</span>
+    <input type="file" id="file" accept="image/*">
+  </label>
+
+  <div class="verdict" id="verdict">
+    <div class="head">
+      <span class="dot" id="dot"></span>
+      <span class="title" id="title"></span>
+      <div class="chips">
+        <span>оценка <b id="score"></b></span>
+        <span>площадь <b id="area"></b></span>
+        <span>областей <b id="nreg"></b></span>
+        <span>инференс <b id="ms"></b></span>
+      </div>
+    </div>
+    <div class="view">
+      <div>
+        <canvas id="canvas"></canvas>
+        <label class="sw"><input type="checkbox" id="overlay" checked> показывать маску поверх кадра</label>
+      </div>
+      <div>
+        <table>
+          <thead><tr><th>область</th><th>доля кадра</th><th>ср. p</th></tr></thead>
+          <tbody id="regions"></tbody>
+        </table>
+        <p class="muted" id="none" style="display:none">Подозрительных областей не найдено.</p>
+      </div>
+    </div>
+  </div>
+  <p class="err" id="error"></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const drop = $('drop'), file = $('file');
+let current = null;   // {image, mask}
+
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files.length) send(e.dataTransfer.files[0]);
+});
+file.addEventListener('change', () => { if (file.files.length) send(file.files[0]); });
+$('overlay').addEventListener('change', draw);
+
+async function send(f){
+  $('error').textContent = '';
+  const body = new FormData(); body.append('file', f);
+  let data;
+  try {
+    const response = await fetch('/detect?mask=true', {method:'POST', body});
+    data = await response.json();
+    if (!response.ok) throw new Error(data.detail || response.statusText);
+  } catch (err){ $('error').textContent = 'Ошибка: ' + err.message; return; }
+
+  const image = await load(URL.createObjectURL(f));
+  const mask = data.mask_png_base64 ? await load('data:image/png;base64,' + data.mask_png_base64) : null;
+  current = {image, mask, regions: data.regions};
+
+  $('verdict').style.display = 'block';
+  const bad = data.manipulated;
+  $('dot').style.background = bad ? 'var(--bad)' : 'var(--ok)';
+  $('title').textContent = bad ? 'Обнаружены признаки правки' : 'Признаков правки не обнаружено';
+  $('score').textContent = data.score.toFixed(3);
+  $('area').textContent = (data.area_frac * 100).toFixed(2) + '%';
+  $('nreg').textContent = data.n_regions;
+  $('ms').textContent = data.inference_ms.toFixed(1) + ' мс';
+
+  const rows = data.regions.slice(0, 12).map((r, i) =>
+    `<tr><td>#${i + 1}</td><td>${(r.area_frac * 100).toFixed(2)}%</td><td>${r.mean_prob.toFixed(3)}</td></tr>`).join('');
+  $('regions').innerHTML = rows;
+  $('none').style.display = data.n_regions ? 'none' : 'block';
+  draw();
+}
+
+const load = src => new Promise((ok, no) => {
+  const img = new Image(); img.onload = () => ok(img); img.onerror = no; img.src = src;
+});
+
+function draw(){
+  if (!current) return;
+  const {image, mask, regions} = current;
+  const canvas = $('canvas'), ctx = canvas.getContext('2d');
+  canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+  ctx.drawImage(image, 0, 0);
+  if (!mask || !$('overlay').checked) return;
+
+  // маска приходит как PNG 0/255; красим её в красный с прозрачностью,
+  // чтобы под правкой оставалось видно само изображение
+  const off = document.createElement('canvas');
+  off.width = canvas.width; off.height = canvas.height;
+  const octx = off.getContext('2d');
+  octx.drawImage(mask, 0, 0, canvas.width, canvas.height);
+  const pixels = octx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = pixels.data;
+  for (let i = 0; i < d.length; i += 4){
+    const on = d[i] > 127;
+    d[i] = 230; d[i+1] = 60; d[i+2] = 50; d[i+3] = on ? 110 : 0;
+  }
+  octx.putImageData(pixels, 0, 0);
+  ctx.drawImage(off, 0, 0);
+
+  ctx.lineWidth = Math.max(2, canvas.width / 500);
+  ctx.strokeStyle = 'rgba(230,60,50,.95)';
+  for (const r of regions) ctx.strokeRect(r.x, r.y, r.width, r.height);
+}
+</script>
+</body>
+</html>

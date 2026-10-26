@@ -1,0 +1,43 @@
+{
+  "source": "product/calibrate.py",
+  "checkpoint": "/home/jovyan/zorin/aic2026_detective/work/FIN2_b2_704_dec128_posbal_tversky_e161_submit/best.pt",
+  "val_paths_sha256": "fed19ab30fde49dcca9f59968f3d61e445e99371da05d02a0984f2bae1ba70d6",
+  "validation_n": 4210,
+  "clean_n": 1006,
+  "score": "ltop0.001",
+  "space": "logit",
+  "top_fraction": 0.001,
+  "auc": 0.9841674050577931,
+  "platt": {
+    "a": 0.33302013136533803,
+    "b": 1.4425874204149625
+  },
+  "brier": 0.02697211888044276,
+  "operating_points": {
+    "fpr<=0.001": {
+      "tpr": 0.9491260923845194,
+      "fpr": 0.0009940357852882703,
+      "threshold": 6.838949680328369
+    },
+    "fpr<=0.01": {
+      "tpr": 0.964107365792759,
+      "fpr": 0.009940357852882704,
+      "threshold": -4.251190662384033
+    },
+    "fpr<=0.05": {
+      "tpr": 0.9662921348314607,
+      "fpr": 0.04970178926441352,
+      "threshold": -7.817147731781006
+    }
+  },
+  "shipped_rule": {
+    "rule": "area(prob>=0.70) > 1%",
+    "tpr": 0.9325842696629213,
+    "fpr": 0.0009940357852882703
+  },
+  "at_shipped_fpr": {
+    "tpr": 0.9491260923845194,
+    "fpr": 0.0009940357852882703,
+    "threshold": 6.838949680328369
+  }
+}

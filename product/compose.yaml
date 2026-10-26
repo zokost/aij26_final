@@ -1,0 +1,20 @@
+services:
+  detective:
+    image: aij-detective:stage2-121
+    build:
+      context: .
+    ports:
+      - "${DETECTIVE_BIND:-127.0.0.1}:${DETECTIVE_PORT:-8080}:8765"
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_EXPLANATIONS_ENABLED: ${OPENROUTER_EXPLANATIONS_ENABLED:-0}
+      OPENROUTER_EXPLANATION_MODEL: ${OPENROUTER_EXPLANATION_MODEL:-deepseek/deepseek-v4.1-flash-1017}
+    restart: unless-stopped
+    init: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

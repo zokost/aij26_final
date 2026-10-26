@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#94aba3"/><stop offset="1" stop-color="#516c62"/></linearGradient><filter id="shadow"><feDropShadow dx="12" dy="22" stdDeviation="24" flood-opacity=".25"/></filter></defs>
+<rect width="1400" height="900" fill="url(#bg)"/>
+<path d="M0 190L1400 73M0 442L1400 325M0 694L1400 577" stroke="#b8c7b4" stroke-width="2" opacity=".18"/>
+<g transform="rotate(-13 1140 650)"><rect x="1020" y="335" width="70" height="412" rx="25" fill="#24392f"/><rect x="1037" y="380" width="7" height="286" rx="3" fill="#667c66"/><path d="M1025 744L1056 827L1083 744" fill="#d5cbb0"/><path d="M1046 797L1056 827L1064 797" fill="#27392e"/></g>
+<g filter="url(#shadow)"><path d="M447 81H955V799L939 790L923 799L907 790L891 799L875 790L859 799L843 790L827 799L811 790L795 799L779 790L763 799L747 790L731 799L715 790L699 799L683 790L667 799L651 790L635 799L619 790L603 799L587 790L571 799L555 790L539 799L523 790L507 799L491 790L475 799L459 790L447 799Z" fill="#f1efdf"/></g>
+<g fill="#354239" font-family="monospace"><text x="701" y="162" font-size="36" text-anchor="middle" font-weight="bold" letter-spacing="5">LOCAL STORE</text><text x="701" y="195" font-size="16" text-anchor="middle">Учебный документ · не является чеком</text><text x="499" y="257" font-size="18">ПОКУПКА #014 / 12.10.2026</text>
+<path d="M500 284H900M500 520H900M500 648H900" stroke="#8b9788" stroke-dasharray="6 7"/>
+<g font-size="22"><text x="500" y="331">Кофе</text><text x="900" y="331" text-anchor="end">320.00</text><text x="500" y="378">Блокнот</text><text x="900" y="378" text-anchor="end">480.00</text><text x="500" y="425">Ручка</text><text x="900" y="425" text-anchor="end">150.00</text><text x="500" y="477">Скидка</text><text x="900" y="477" text-anchor="end">−50.00</text></g>
+<text x="500" y="598" font-size="32" font-weight="bold">ИТОГО</text><text x="900" y="598" text-anchor="end" font-size="32" font-weight="bold">900.00</text><text x="500" y="691" font-size="18">ОПЛАТА КАРТОЙ</text><text x="500" y="728" font-size="16">Спасибо за покупку</text></g>
+<g stroke="#506148" stroke-width="2" opacity=".55"><path d="M816 105V122M821 105V122M826 105V122M834 105V122M838 105V122M846 105V122M855 105V122M862 105V122M869 105V122M880 105V122M884 105V122M893 105V122"/></g>
+<text x="48" y="845" fill="#dbe4d5" font-family="Arial" font-size="17" letter-spacing="4">ILLUSTRATIVE DOCUMENT</text>
+</svg>

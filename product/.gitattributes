@@ -1,0 +1,2 @@
+# Preserve the exact distribution bytes used by SHA256SUMS on every platform.
+* -text
