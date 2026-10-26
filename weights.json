@@ -35,6 +35,27 @@
       "purpose": "stage-one ConvNeXt-L DINOv3 / UPerNet, fold2, stage-two teacher initialization",
       "fold": 2,
       "best_epoch": 38
+    },
+    {
+      "file": "121/model.pt",
+      "bytes": 99877063,
+      "sha256": "40841b9c867d5c6f1ed8fcfacefb14787a377d58f770da86e67067f1d57a4cf1",
+      "purpose": "Final submission121 segmentation checkpoint",
+      "url": "https://github.com/zokost/aij_2026/raw/main/weights_final/121_NC17_e32/model.pt"
+    },
+    {
+      "file": "121/policy.pkl",
+      "bytes": 63218,
+      "sha256": "0bf2ba074b3609aefea2eba383ab512f5d635311315c76a79e3b08472023de25",
+      "purpose": "Final submission121 frozen calibration artifact",
+      "url": "https://github.com/zokost/aij_2026/raw/main/weights_final/121_NC17_e32/policy.pkl"
+    },
+    {
+      "file": "121/encoder_transform.pkl",
+      "bytes": 480697,
+      "sha256": "fc865212594a3e98eb3e9b1465d75225782a422bebc636f4a7f99ebc949b9758",
+      "purpose": "Final submission121 frozen calibration artifact",
+      "url": "https://github.com/zokost/aij_2026/raw/main/weights_final/121_NC17_e32/encoder_transform.pkl"
     }
   ]
 }

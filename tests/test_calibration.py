@@ -16,12 +16,12 @@ class CalibrationChecks(unittest.TestCase):
     def test_guard_includes_exact_one_percent_as_alarm(self):
         model = FixedGains([[.2,.1,0,0]]*3)
         thresholds = choose_thresholds(model, np.zeros((3,276)), np.array([9,10,11]), np.array([1000]*3))
-        np.testing.assert_array_equal(thresholds, [.75,.5,.5])
+        np.testing.assert_array_equal(thresholds, [.675,.5,.5])
 
     def test_no_positive_gain_preserves_baseline(self):
         model = FixedGains([[-.1,-.2,-.3,0], [0,0,0,0], [1e-9,0,0,0]])
         thresholds = choose_thresholds(model, np.zeros((3,276)), np.array([100]*3), np.array([1000]*3))
-        np.testing.assert_array_equal(thresholds, [.75]*3)
+        np.testing.assert_array_equal(thresholds, [.675]*3)
 
     def test_native_probability_features_handle_constant_maps(self):
         for value in [0.,.75,1.]:

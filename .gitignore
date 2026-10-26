@@ -6,5 +6,12 @@ weights/
 *.pt
 *.pth
 *.safetensors
+*.safetensor
+*.ckpt
+*.pkl
+*.onnx
+*.engine
 *.zip
 .env
+
+.ipynb_checkpoints/

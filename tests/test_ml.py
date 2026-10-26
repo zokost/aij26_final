@@ -16,9 +16,36 @@ from stage2.recipe import resolve
 from stage2.runtime import Images
 from stage2.search import best_epoch, candidates, main as search_main
 from stage2.validate import check_disjoint, evaluate_nb
+from stage2.distillation import DistillationLoss, DistillationImages
 
 
 class MLChecks(unittest.TestCase):
+    def test_stage2_distillation_preserves_supervision_and_masks_auxiliary(self):
+        logits=torch.zeros(2,1,8,8,requires_grad=True)
+        gt=torch.zeros_like(logits);gt[0,:,2:4,2:4]=1
+        teacher=torch.full_like(logits,.8);valid=torch.zeros_like(logits)
+        criterion=DistillationLoss(weight=.6)
+        baseline=Loss()(logits,gt)
+        self.assertTrue(torch.equal(criterion(logits,torch.cat([gt,teacher,valid],1)),baseline))
+        valid[0]=1
+        loss=criterion(logits,torch.cat([gt,teacher,valid],1))
+        expected=baseline+.6*torch.nn.functional.binary_cross_entropy_with_logits(logits[:1],teacher[:1])
+        self.assertTrue(torch.allclose(loss,expected))
+        loss.backward();self.assertTrue(torch.isfinite(logits.grad).all())
+
+    def test_stage2_teacher_and_gt_share_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);mask=np.zeros((48,64),np.uint8);mask[2:16,5:23]=255
+            Image.fromarray(np.zeros((48,64,3),np.uint8)).save(p/'image.png')
+            Image.fromarray(mask).save(p/'mask.png')
+            teacher=np.where(mask>0,2.,-2.).astype(np.float16)
+            np.savez_compressed(p/'teacher.npz',logits=teacher)
+            frame=pd.DataFrame([dict(orgl_img_path=str(p/'image.png'),chng_img_path=str(p/'image.png'),gt_path=str(p/'mask.png'))])
+            dataset=DistillationImages(frame,64,soft=True,teacher_index={str((p/'image.png').resolve()):p/'teacher.npz'})
+            _,targets=dataset[0]
+            self.assertTrue(torch.equal(targets[0]>.5,targets[1]>.5))
+            self.assertTrue(torch.all(targets[2]==1))
+
     def test_loss_empty_soft_and_small_targets(self):
         for beta in (.5, .7, None):
             logits = torch.zeros(3, 1, 8, 8, requires_grad=True)

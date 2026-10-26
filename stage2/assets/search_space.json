@@ -1,5 +1,5 @@
 {
-  "defaults": {"schedule_epochs": 4, "final_epoch": 4},
+  "defaults": {"schedule_epochs": 4, "final_epoch": 4, "stage2_kd_weight": 0},
   "variants": [
     {"name": "kdall_control", "overrides": {}},
     {"name": "lr3e-5", "overrides": {"lr": 0.00003}},

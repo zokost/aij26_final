@@ -39,7 +39,7 @@ def best_epoch(history):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", type=Path, default=Path(__file__).with_name("search_space.json"))
+    parser.add_argument("--plan", type=Path, default=Path(__file__).parent / "assets/search_space.json")
     parser.add_argument("--root", type=Path, default=Path("data"))
     parser.add_argument("--manifests", type=Path, required=True)
     parser.add_argument("--initial", type=Path, default=Path("weights/FULL2_late_avg5.pt"))

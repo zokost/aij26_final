@@ -9,7 +9,7 @@ import numpy as np
 
 from .runtime import COLUMNS, Predictor, probabilities, read_rows
 
-DEFAULT_CSV = Path(__file__).with_name("nb_validation.csv")
+DEFAULT_CSV = Path(__file__).parent / "assets/nb_validation.csv"
 
 
 def validation_rows(csv, root):

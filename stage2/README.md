@@ -1,126 +1,114 @@
-# KDALL
+# Финальный этап: NC17
 
-Текущий вариант — **№116, public AIC0.826555**: веса KDALL e32 и замороженная
-калибровка с понижением порога. Подробности, необходимые артефакты и команда
-инференса — в [CALIBRATION.md](CALIBRATION.md). Ниже сохранён базовый рецепт
-№113; обучение сегментатора у №116 такое же.
+Посылка **№121**, public AIC **0.831234**. MiT-B2 / SegFormer320, squish640,
+epoch=32. Сегментатор обучается на stage2 и мягких NB-целях; дополнительно
+получает BCE0.6 от учителей на stage2. На инференсе используется один студент
+и замороженный калибратор с базовым порогом0.675.
 
-[Методология и критерии качества ML](METHODOLOGY.md): обоснование методов,
-сравнение архитектур, правила подбора и пределы воспроизводимости.
+## Данные
 
-[Короткий EDA и сравнение экспериментов](eda_comparisons.ipynb): состав данных,
-геометрия изображений, площади масок, визуальные примеры и ключевые результаты
-NB/ЛБ. Выводы и графики сохранены. Геометрия исследуется на фиксированных
-случайных выборках до256 позитивных изображений каждого набора (seed42);
-результаты моделей читаются из `report_experiments.csv`, без нового инференса.
-Дополнительные зависимости для запуска ноутбука:
+Команды выполняются из корня. Изображения и цели — в `data/`, исходные веса —
+в `weights/`, подготовленные CSV — в `manifests/`:
 
-```bash
-pip install -r stage2/requirements-report.txt
-```
+- `stage2_train.csv`:19837 строк, включая чистые кадры;
+- `nb_pairs.csv`:9693 NB-пары, `pair_id`, `fold`;
+- `epoch01.csv` … `epoch40.csv`:1999 NB-пар на эпоху;
+- `teacher_extra0.csv` … `teacher_extra2.csv`: дополнения для NB-учителей;
+- `teacher_stage2_fold0.csv` … `teacher_stage2_fold2.csv`: полные списки stage2-учителей;
+- `stage2_heldout_fold0.csv` … `stage2_heldout_fold2.csv`: исключённые stage2-источники;
+- `stage2_pairs.csv`:19837 stage2-кадров с `fold` для экспорта OOF-целей.
 
-Воспроизведение конфигурации посылки №113: MiT-B2 / SegFormer320, squish640,
-epoch=32, FP32-инференс с batch4, threshold=0.75, без ансамбля и TTA.
+Колонки изображений: `orgl_img_path`, `chng_img_path`, `gt_path`, пути относительно
+`data/`. Пустой `gt_path` — чистый кадр. Списки и разностные NB-маски являются
+входными артефактами; они не строятся заново. Источник и его правки относятся
+к одному фолду. Программа проверяет пересечения путей, включая симлинки.
+Архив списков — `manifests_nc17_20261026.zip`; размеры и SHA256 — в
+[assets/manifests.json](assets/manifests.json).
 
+## Учителя и цели
 
-Запускать из корня репозитория с зависимостями из `requirements.txt`.
-Изображения и подготовленные маски находятся вне Git в `data/`; веса — в `weights/`.
-Подготовленные списки передаются отдельно в каталоге `manifests/`:
-
-- `stage2_train.csv`: фиксированные 19837 строк, включая чистые оригиналы;
-- `teacher_extra0.csv` … `teacher_extra2.csv`: NB без собственного фолда и дубль stage2;
-- `nb_pairs.csv`: 9693 пары NB с колонками `pair_id` и `fold`;
-- `epoch01.csv` … `epoch40.csv`: исходные списки по 1999 NB-пар на эпоху.
-
-В репозитории также находится `stage2/nb_validation.csv`: фиксированные550
-отложенных NB-пар. Изображения и их приблизительные разностные маски необходимо
-положить в `data/` по путям этого CSV. Список не содержит сами изображения.
-
-Общие колонки обучающих CSV: `orgl_img_path`, `chng_img_path`, `gt_path`.
-Пути относительны `data/`, пустой `gt_path` означает чистое изображение.
-Для учителей нужны исходные разностные NB-маски `nanobanana/nb_v2/masks_affine/`.
-Эти подготовленные маски и списки здесь не вычисляются заново: они являются
-обязательными входными артефактами воспроизведения. Исходная ротация NB сохранена
-в списках эпох без изменений.
-
-Дообучить трёх учителей из весов первого этапа (каждая команда на своей карте):
+ConvNeXt-L DINOv3 / UPerNet832,12 эпох, batch6, AdamW1e-4, LR энкодера×0.1.
+Для каждого `F=0,1,2` запустите на отдельной карте:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m stage2.train teacher --fold 0 --manifests manifests --initial weights/DIAG_teacher_fold0of3_cnxl_832_e40.pt --out work/stage2_teacher0
-CUDA_VISIBLE_DEVICES=1 python -m stage2.train teacher --fold 1 --manifests manifests --initial weights/DIAG_teacher_fold1of3_cnxl_832_e40.pt --out work/stage2_teacher1
-CUDA_VISIBLE_DEVICES=2 python -m stage2.train teacher --fold 2 --manifests manifests --initial weights/DIAG_teacher_fold2of3_cnxl_832_e40.pt --out work/stage2_teacher2
+CUDA_VISIBLE_DEVICES=$F python -m stage2.train teacher --fold $F --manifests manifests --initial weights/DIAG_teacher_fold${F}of3_cnxl_832_e40.pt --out work/nb_teacher$F
+CUDA_VISIBLE_DEVICES=$F python -m stage2.train stage2-teacher --fold $F --manifests manifests --initial weights/DIAG_teacher_fold${F}of3_cnxl_832_e40.pt --out work/stage2_teacher$F
 ```
 
-Учитель: ConvNeXt-L DINOv3 + UPerNet832, 12 эпох, batch6, AdamW1e-4,
-LR энкодера ×0.1. NB-пару размечает учитель, не обучавшийся на её фолде.
-Мягкая маска: `round(255*p)`, значения `p<0.02` обнуляются.
+Это два набора учителей: NB-пара исключена из дообучения своего NB-учителя,
+а stage2-источник — из дообучения своего stage2-учителя.
 
 ```bash
-python -m stage2.labels --pairs manifests/nb_pairs.csv --teachers work/stage2_teacher0/epoch12.pt work/stage2_teacher1/epoch12.pt work/stage2_teacher2/epoch12.pt --out data/nanobanana/nb_v2/probs_cfL
-python -m stage2.train student --manifests manifests --initial weights/FULL2_late_avg5.pt --out work/kdall
-python -m stage2.infer --checkpoint work/kdall/epoch32.pt --root data/test_stage2 --csv data/test_stage2/test.csv --out work/submission_stage2
+python -m stage2.labels --pairs manifests/nb_pairs.csv --teachers work/nb_teacher0/epoch12.pt work/nb_teacher1/epoch12.pt work/nb_teacher2/epoch12.pt --out data/nanobanana/nb_v2/probs_cfL
+python -m stage2.labels --kind stage2 --pairs manifests/stage2_pairs.csv --teachers work/stage2_teacher0/epoch12.pt work/stage2_teacher1/epoch12.pt work/stage2_teacher2/epoch12.pt --out data/stage2_oof
 ```
 
-Студент: свежий декодер с seed42, энкодер FULL2_late_avg5 обучается с LR1e-5,
-остальные веса — LR1e-4. На эпоху 19837 stage2 + 1999 NB + 1999 чистых исходников;
-batch18, 1324 шага. Cosine рассчитан на 40 эпох с warmup5%; останавливаемся на32.
-Лосс: BCE0.5 с балансировкой позитивных пикселей + per-image Tversky0.5 (β0.7),
-для чистых масок — штраф предсказанной площади. Обучение BF16.
-Аугментации: HFlip0.5, VFlip0.2, JPEG90–100 с вероятностью0.2.
+NB-цели: `round(255*p)`, `p<0.02` обнуляется. Stage2-цели: native-size float16
+логиты в NPZ; sigmoid вычисляется в float32 при загрузке, без клиппинга.
 
-`--resume` продолжает обучение из `last.pt`. `--stop-epoch` сохраняет исходное
-расписание LR. Повторное обучение не гарантирует побитового совпадения весов;
-точное воспроизведение посылки требует исходного `epoch32.pt`.
-
-Для исследовательского варианта студента передайте `--recipe config.json`.
-Допустимые поля и их исходные значения определены в `recipe.py`; неизвестные
-поля и неверные значения отвергаются. Конфигурация сохраняется в checkpoint,
-`run.json` фиксирует версии, число шагов и SHA256 манифестов. При resume нельзя
-менять конфигурацию или манифесты. История содержит loss, NB-метрики и LR групп.
-Без `--recipe` все параметры остаются исходными. Рецепты ImageNet не принимают
-`--initial`; для них декодер B1/B2 инициализируется независимо от размера энкодера.
-
-Запуск [плана подбора](search_space.json) и его результаты описаны в
-[методологии](METHODOLOGY.md). Новый полный подбор ещё не выполнен;
-`report_experiments.csv` и `model_comparisons.csv` содержат исторические результаты.
-
-## Валидация Nano-Banana
-
-После каждой эпохи учителя и студента автоматически оцениваются550 NB-правок
-и550 парных чистых исходников. Используется `stage2/nb_validation.csv`;
-другой список можно передать через `--nb-val-csv`. До обучения каждой эпохи
-проверяется отсутствие пересечений исходных и изменённых путей с её обучающим
-списком, включая пути, разрешаемые через символические ссылки. Это проверка
-путей, не поиск одинакового содержимого в разных файлах и не аудит предобучения.
-
-Маски — приблизительные, построенные по разнице пары, не официальная пиксельная
-GT. Панель550 получена из NB600 исключением50 пар с выявленными пересечениями
-в обучающих списках ранних экспериментов. Для сравнения применяется фиксированный
-порог0.75. Показатели сохраняются в поле `nb` каждой эпохи в `history.json`:
-
-- `dice_positive`: средний Dice по изменённым изображениям;
-- `fpr_negative`: доля чистых исходников, где предсказанная площадь ≥1% кадра;
-- `aic`: `2 * dice_positive * (1 - fpr_negative) / (dice_positive + 1 - fpr_negative)`.
-
-Оценка идёт в FP32, batch4, без аугментаций, при разрешении модели.
-Перед sigmoid логиты интерполируются в исходный размер. После оценки
-восстанавливается режим обучения модели. NB-метрики служат для наблюдения;
-итоговый чекпойнт воспроизведения остаётся `epoch=32`.
-
-Отдельная оценка готового чекпойнта:
+## Студент
 
 ```bash
-python -m stage2.validate --checkpoint weights/KDALL_epoch32.pt --root data --out work/kdall_nb.json
+python -m stage2.train student --manifests manifests --stage2-targets data/stage2_oof/index.csv --initial weights/FULL2_late_avg5.pt --out work/nc17
 ```
 
-В JSON также записываются путь чекпойнта, разрешение и SHA256 списка пар.
-Для дополнительной диагностики доступны `--threshold` и `--batch-size`;
-для сопоставимости с основной таблицей используйте0.75 и4.
+Свежий декодер, seed42; из первого этапа переносится только энкодер.
+На эпоху:19837 stage2 +1999 мягких NB +1999 парных чистых исходников;
+batch18,1324 шага. AdamW1e-4, LR энкодера1e-5, cosine40 эпох, warmup5%; epoch=32.
+BF16-обучение. Аугментации: HFlip0.5, VFlip0.2, JPEG90–100 с вероятностью0.2.
 
-Контрольный результат для исходных весов KDALL `epoch32.pt` на этом списке:
-Dice **0.581251**, FPR **0.025455**, AIC **0.728188**. Эти показатели относятся
-к NB с приблизительными масками и не равны результату посылки на платформе.
+Лосс — BCE0.5 с балансировкой позитивных пикселей + per-image Tversky0.5
+(β0.7), для чистых целей — штраф площади. Дополнительный pixel-mean BCE×0.6
+применяется только к stage2-кадрам с OOF-целями; официальная GT не заменяется.
+Все три карты — GT, вероятность учителя и valid — проходят общую геометрию.
 
-С исходными весами проверено побайтовое совпадение `submission.csv` и всех
-1890 PNG-масок с посылкой №113. Проверен один шаг обучения BF16 с обратным
-проходом; полное обучение повторно не запускалось.
+`--resume` продолжает совместимый `last.pt`; `--stop-epoch` сохраняет расписание.
+`run.json` фиксирует версии и SHA256 манифестов. Повторное обучение не гарантирует
+побитового совпадения: для воспроизведения посылки используйте сданные веса.
+
+## Валидация и инференс
+
+После каждой эпохи считаются Dice/FPR/AIC на550 NB-парах из `assets/nb_validation.csv`
+при0.75. Маски приблизительные, разностные; панель использовалась неоднократно.
+У NC17 epoch32 без калибровки: Dice **0.580080**, FPR **0.027273**, AIC **0.726761**.
+
+```bash
+python -m stage2.validate --checkpoint weights/121/model.pt --root data --out work/nc17_nb.json
+python -m stage2.infer --checkpoint weights/121/model.pt --calibration weights/121 --root data/test_stage2 --csv data/test_stage2/test.csv --out work/submission
+```
+
+## Калибровка и скорость
+
+Калибратор обучен на выделенной части NB/stage2:405 NB и835 stage2-позитивах,
+прошедших базовый guard, с равным суммарным весом источников. ExtraTrees32,
+depth5, leaf64, seed45.276 признаков: карта вероятностей22, геометрия49,
+границы54, RGB119 и PCA32 от3072 ROI-признаков того же forward.
+
+Порог0.675 — максимум AIC на NB550 в проверенной сетке с шагом0.025.
+При базовой площади<1% маска заморожена. Иначе выбирается максимальный
+предсказанный выигрыш Dice среди0.50/0.60/0.65/0.675; при выигрыше≤1e-8
+остаётся0.675. Это сохраняет image-level срабатывания своей базовой карты.
+
+По умолчанию FP32 batch4 воспроизводит все1890 масок №121 пиксель в пиксель.
+`--batch-size 1` включает CUDA Graph и ускоренную обработку признаков.
+На A100 + Xeon8358: среднее35.94мс, p95=47.07мс, включая чтение JPEG и калибровку,
+без записи PNG/ZIP. Это не строгая гарантия50мс для каждого кадра; H100 не измерен.
+Batch1 меняет1265 пикселей из1.432млрд относительно batch4, image-level флаги
+сохраняются. Необязательный `--compile` даёт30.97мс, но меняет больше предсказаний.
+
+## EDA и подбор
+
+[Ноутбук](eda_comparisons.ipynb) содержит сохранённый EDA, методологию и сравнения.
+Таблицы, NB-список, конфигурация поиска и зависимости отчёта — в `assets/`.
+Для запуска ноутбука: `pip install -r stage2/assets/requirements-report.txt`.
+Проверка плана9 вариантов без обучения:
+
+```bash
+python -m stage2.search --manifests manifests --initial weights/FULL2_late_avg5.pt --out work/screen --dry-run
+```
+
+Без `--dry-run` запускается NB-only скрининг:4 эпохи на вариант, общий бюджет,
+412 tuning и138 control-пар. Control оценивается после фиксации победителя.
+Для изолированного сравнения дополнительная stage2 KD в этом плане отключена.
+Это короткий скрининг, не замена полного рецепта NC17; его9 запусков для отчёта
+не выполнялись. Проверки: `python -m unittest discover -s tests -v`.
