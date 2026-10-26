@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--teachers", type=Path, nargs=3, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument('--kind',choices=['nb','stage2'],default='nb')
+    parser.add_argument('--resume',action='store_true',help='Reuse complete target files after an interrupted export')
     args = parser.parse_args()
     pairs = pd.read_csv(args.pairs)
     expected=9693 if args.kind=='nb' else 19837
@@ -26,7 +27,7 @@ def main():
         raise ValueError(f'Expected {expected} unique images with fold0/1/2')
     if args.kind=='stage2' and pairs.groupby('orgl_img_path').fold.nunique().max()!=1:
         raise ValueError('Each original source must belong to one OOF fold')
-    args.out.mkdir(parents=True, exist_ok=False)
+    args.out.mkdir(parents=True, exist_ok=args.resume)
     records=[]
     for fold, checkpoint in enumerate(args.teachers):
         predictor = Predictor(checkpoint)
@@ -34,6 +35,28 @@ def main():
         batch=8 if args.kind=='nb' else 4
         for offset in range(0, len(part), batch):
             chunk = part.iloc[offset:offset + batch]
+            if args.resume:
+                pending=[]
+                for row in chunk.itertuples():
+                    name=(hashlib.sha256(row.chng_img_path.encode()).hexdigest()+'.npz') if args.kind=='stage2' else f'{int(row.pair_id)}.png'
+                    path=args.out/name
+                    complete=False
+                    if path.is_file():
+                        try:
+                            if args.kind=='stage2':
+                                with np.load(path,allow_pickle=False) as saved:
+                                    value=saved['logits']
+                                    complete=value.ndim==2 and value.dtype==np.float16 and np.isfinite(value).all()
+                            else:
+                                value=cv2.imread(str(path),cv2.IMREAD_GRAYSCALE)
+                                complete=value is not None
+                        except (OSError,ValueError,KeyError,EOFError):
+                            complete=False
+                    if complete:
+                        if args.kind=='stage2':records.append(dict(chng_img_path=row.chng_img_path,teacher_fold=fold,logits_path=str(path.resolve())))
+                    else:pending.append(row.Index)
+                chunk=chunk.loc[pending]
+                if chunk.empty:continue
             if args.kind=='stage2':
                 images=[];shapes=[]
                 from common import MEAN, STD
@@ -49,7 +72,9 @@ def main():
                         native=F.interpolate(logits[i:i+1].float(),shapes[i],mode='bilinear',align_corners=False)[0,0].cpu().numpy().astype(np.float16)
                         if not np.isfinite(native).all():raise FloatingPointError(row.chng_img_path)
                         path=args.out/(hashlib.sha256(row.chng_img_path.encode()).hexdigest()+'.npz')
-                        np.savez_compressed(path,logits=native)
+                        temporary=path.with_suffix('.tmp')
+                        with temporary.open('wb') as stream:np.savez_compressed(stream,logits=native)
+                        temporary.replace(path)
                         records.append(dict(chng_img_path=row.chng_img_path,teacher_fold=fold,logits_path=str(path.resolve())))
                 continue
             probabilities=predictor([args.root/path for path in chunk.chng_img_path])
@@ -57,8 +82,10 @@ def main():
                 probability = probability.astype(np.float32)
                 probability[probability < .02] = 0
                 path = args.out / f"{int(row.pair_id)}.png"
-                if not cv2.imwrite(str(path), np.round(probability * 255).astype(np.uint8)):
-                    raise OSError(path)
+                temporary=path.with_name(path.stem+'.tmp.png')
+                if not cv2.imwrite(str(temporary), np.round(probability * 255).astype(np.uint8)):
+                    raise OSError(temporary)
+                temporary.replace(path)
         del predictor
         torch.cuda.empty_cache()
         print(f"fold {fold}: {len(part)} targets", flush=True)

@@ -6,7 +6,7 @@ optional eager CUDA Graph and early exit under the frozen 1% guard.
 import os
 os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG',':4096:8')
 from pathlib import Path
-import pickle,time
+import json,pickle,time
 from threading import Lock
 from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor
@@ -47,9 +47,21 @@ class CalibratedPredictor:
         policy_name='policy.pkl' if (folder/'policy.pkl').exists() else 'refit_submit.pkl'
         policy_bytes=(folder/policy_name).read_bytes()
         transform_bytes=(folder/'encoder_transform.pkl').read_bytes()
-        if sha256(policy_bytes).hexdigest()!='0bf2ba074b3609aefea2eba383ab512f5d635311315c76a79e3b08472023de25':
+        expected_policy='0bf2ba074b3609aefea2eba383ab512f5d635311315c76a79e3b08472023de25'
+        expected_transform='fc865212594a3e98eb3e9b1465d75225782a422bebc636f4a7f99ebc949b9758'
+        metadata=folder/'calibration.json'
+        if metadata.exists():
+            from .fit_calibration import digest
+            trained=json.loads(metadata.read_text())
+            if trained['checkpoint_sha256']!=digest(checkpoint):
+                raise ValueError('Calibration belongs to a different checkpoint')
+            if trained['base']!=float(BASE) or trained['candidates']!=CANDIDATES.tolist():
+                raise ValueError('Calibration does not use the fixed NC17 actions')
+            expected_policy=trained['artifacts']['policy.pkl']
+            expected_transform=trained['artifacts']['encoder_transform.pkl']
+        if sha256(policy_bytes).hexdigest()!=expected_policy:
             raise ValueError('Expected frozen submission121 policy')
-        if sha256(transform_bytes).hexdigest()!='fc865212594a3e98eb3e9b1465d75225782a422bebc636f4a7f99ebc949b9758':
+        if sha256(transform_bytes).hexdigest()!=expected_transform:
             raise ValueError('Expected matching submission121 scaler/PCA')
         self.policy=pickle.loads(policy_bytes)
         self.transform=pickle.loads(transform_bytes)

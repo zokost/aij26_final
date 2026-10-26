@@ -1,7 +1,7 @@
 {
   "file": "manifests_nc17_20261026.zip",
-  "sha256": "e21ebe965c3cb460cfa1e5f057b61fc3b6ca6276fcaf7dcc063971f14972b723",
-  "bytes": 5991144,
+  "sha256": "496c1f9dbe69c1296b2cc037cf5370739e66862d8178cdcd97a594569bba58d6",
+  "bytes": 6037391,
   "manifests": {
     "stage2_train.csv": {
       "rows": 19837,
@@ -210,6 +210,10 @@
     "stage2_pairs.csv": {
       "rows": 19837,
       "sha256": "0e76b4b292a05ec8be07c7822c7b48994598c10e7497d58d2ecf9e2dc41915b8"
+    },
+    "calibration.csv": {
+      "rows": 2990,
+      "sha256": "581778f2a3756403ce283d9765c612030adde17db6dbf7aae3a335f3c8049dad"
     }
   }
 }

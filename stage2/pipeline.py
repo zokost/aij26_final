@@ -1,0 +1,190 @@
+"""Run NC17 training from prepared data and stage-one initialization weights."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import fcntl
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+import pandas as pd
+
+from .fit_calibration import digest
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+ASSETS = Path(__file__).parent / 'assets'
+SOFT_SUBDIR = Path('nanobanana/nb_v2/probs_cfL')
+
+
+def steps(root, manifests, weights, out, gpus):
+    """Keep the executable plan visible, including devices and fixed epochs."""
+    jobs = []
+    for phase, prefix in (('teacher', 'nb_teacher'), ('stage2-teacher', 'stage2_teacher')):
+        for fold in range(3):
+            folder = out / f'{prefix}{fold}'
+            jobs.append(dict(name=f'{prefix}{fold}', gpu=gpus[fold % len(gpus)],
+                command=[sys.executable, '-m', 'stage2.train', phase, '--root', str(root),
+                         '--manifests', str(manifests), '--initial', str(weights / f'DIAG_teacher_fold{fold}of3_cnxl_832_e40.pt'),
+                         '--fold', str(fold), '--out', str(folder)],
+                outputs=[folder / 'epoch12.pt', folder / 'last.pt']))
+    for kind, prefix, pairs in (('nb', 'nb_teacher', 'nb_pairs.csv'),
+                                 ('stage2', 'stage2_teacher', 'stage2_pairs.csv')):
+        target = out / 'targets' / kind
+        jobs.append(dict(name=f'labels_{kind}', gpu=gpus[0], command=[sys.executable, '-m', 'stage2.labels',
+            '--kind', kind, '--root', str(root), '--pairs', str(manifests / pairs),
+            '--teachers', *[str(out / f'{prefix}{fold}' / 'epoch12.pt') for fold in range(3)],
+            '--out', str(target)], outputs=[target / ('index.csv' if kind == 'stage2' else 'targets.complete.json')]))
+    student = out / 'student'
+    jobs.append(dict(name='student', gpu=gpus[0], command=[sys.executable, '-m', 'stage2.train', 'student',
+        '--root', str(root), '--manifests', str(out / 'student_manifests'),
+        '--stage2-targets', str(out / 'targets/stage2/index.csv'), '--initial', str(weights / 'FULL2_late_avg5.pt'),
+        '--out', str(student)], outputs=[student / 'epoch32.pt', student / 'last.pt']))
+    jobs.append(dict(name='calibration', gpu=gpus[0], command=[sys.executable, '-m', 'stage2.fit_calibration',
+        '--root', str(root), '--entries', str(manifests / 'calibration.csv'),
+        '--checkpoint', str(student / 'epoch32.pt'), '--out', str(out / 'final')],
+        outputs=[out / 'final/calibration.json', out / 'final/policy.pkl', out / 'final/encoder_transform.pkl']))
+    jobs.append(dict(name='validation', gpu=gpus[0], command=[sys.executable, '-m', 'stage2.validate',
+        '--root', str(root), '--checkpoint', str(student / 'epoch32.pt'), '--threshold', '.675',
+        '--out', str(out / 'nb_validation.json')], outputs=[out / 'nb_validation.json']))
+    return jobs
+
+
+def check_inputs(root, manifests, weights):
+    """Fail before GPU work if prepared lists, masks or initialization differ."""
+    manifest_spec = json.loads((ASSETS / 'manifests.json').read_text())['manifests']
+    hashes, paths = {}, set()
+    for name, spec in manifest_spec.items():
+        path = manifests / name
+        if digest(path) != spec['sha256']:
+            raise ValueError(f'Manifest checksum differs: {path}')
+        frame = pd.read_csv(path, keep_default_na=False)
+        if len(frame) != spec['rows']:
+            raise ValueError(f'Manifest row count differs: {path}')
+        hashes[name] = spec['sha256']
+        for column in ('orgl_img_path', 'chng_img_path', 'gt_path', 'path', 'mask', 'valid'):
+            if column not in frame:
+                continue
+            for value in frame[column]:
+                if not value or (column == 'gt_path' and Path(value).parent == SOFT_SUBDIR):
+                    continue
+                paths.add(root / value)
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    nb_val = ASSETS / 'nb_validation.csv'
+    hashes['nb_validation.csv'] = digest(nb_val)
+    val = pd.read_csv(nb_val, keep_default_na=False)
+    for column in ('orgl_img_path', 'chng_img_path', 'gt_path'):
+        for value in val[column]:
+            if not (root / value).is_file():
+                raise FileNotFoundError(root / value)
+    specs = json.loads((REPOSITORY / 'weights.json').read_text())['files']
+    for spec in specs:
+        if spec['file'] == 'FULL2_late_avg5.pt' or spec['file'].startswith('DIAG_teacher_fold'):
+            path = weights / spec['file']
+            if digest(path) != spec['sha256']:
+                raise ValueError(f'Initialization checksum differs: {path}')
+            hashes[spec['file']] = spec['sha256']
+    return dict(root=str(root), manifests=str(manifests), weights=str(weights), hashes=hashes)
+
+
+def student_manifests(manifests, out):
+    """Point rotating NB lists at targets generated by this run, not old files."""
+    destination = out / 'student_manifests'
+    destination.mkdir(exist_ok=True)
+    for source in manifests.glob('*.csv'):
+        if source.name.startswith('epoch'):
+            frame = pd.read_csv(source, keep_default_na=False)
+            frame['gt_path'] = frame.pair_id.map(lambda pair: str(out / 'targets/nb' / f'{int(pair)}.png'))
+            for path in frame.gt_path:
+                if not Path(path).is_file():
+                    raise FileNotFoundError(path)
+            frame.to_csv(destination / source.name, index=False)
+        else:
+            shutil.copyfile(source, destination / source.name)
+
+
+def run_step(job, out, resume):
+    receipt = out / 'completed' / f"{job['name']}.json"
+    command = job['command'].copy()
+    if receipt.exists():
+        saved = json.loads(receipt.read_text())
+        if saved['command'] != command or any(not path.is_file() for path in job['outputs']):
+            raise ValueError(f"Completed stage changed or outputs missing: {job['name']}")
+        print('Already complete:', job['name'], flush=True)
+        return
+    if resume and '-m' in command and command[command.index('-m') + 1] in ('stage2.train', 'stage2.labels'):
+        output = Path(command[command.index('--out') + 1])
+        if (output / 'last.pt').exists() or (job['name'].startswith('labels_') and output.exists()):
+            command.append('--resume')
+        elif output.exists() and command[command.index('-m') + 1] == 'stage2.train':
+            # An interruption before the first checkpoint cannot be resumed.
+            # Preserve its metadata and start this stage from initialization.
+            backup = output.with_name(f'{output.name}.incomplete-{time.time_ns()}')
+            output.rename(backup)
+            print(f'No checkpoint; preserved incomplete stage in {backup}', flush=True)
+    print(f"[{job['name']}] GPU {job['gpu']}: {shlex.join(command)}", flush=True)
+    environment = {**os.environ, 'CUDA_VISIBLE_DEVICES': job['gpu']}
+    with (out / 'logs' / f"{job['name']}.log").open('a') as log:
+        subprocess.run(command, cwd=REPOSITORY, env=environment, stdout=log, stderr=subprocess.STDOUT, check=True)
+    if job['name'] == 'labels_nb':
+        (out / 'targets/nb/targets.complete.json').write_text(json.dumps(dict(pairs=9693)) + '\n')
+    if any(not path.is_file() for path in job['outputs']):
+        raise RuntimeError(f"Stage did not create expected outputs: {job['name']}")
+    receipt.write_text(json.dumps(dict(command=job['command']), indent=2) + '\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, default=Path('data'))
+    parser.add_argument('--manifests', type=Path, default=Path('manifests'))
+    parser.add_argument('--weights', type=Path, default=Path('weights'))
+    parser.add_argument('--out', type=Path, default=Path('work/nc17_pipeline'))
+    parser.add_argument('--gpus', nargs='+', default=['0'], help='Visible CUDA device IDs; one teacher per device')
+    parser.add_argument('--resume', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--dry-run', action='store_true', help='Print the plan without reading data or starting training')
+    mode.add_argument('--check-only', action='store_true', help='Verify input hashes and paths without starting training')
+    args = parser.parse_args()
+    args.root, args.manifests, args.weights, args.out = [p.resolve() for p in (args.root, args.manifests, args.weights, args.out)]
+    if len(set(args.gpus)) != len(args.gpus):
+        parser.error('GPU IDs must be unique')
+    jobs = steps(args.root, args.manifests, args.weights, args.out, args.gpus)
+    for job in jobs:
+        print(f"{job['name']} [GPU {job['gpu']}]: {shlex.join(job['command'])}", flush=True)
+    if args.dry_run:
+        return
+    inputs = check_inputs(args.root, args.manifests, args.weights)
+    if args.check_only:
+        print('Input files and checksums verified; no training started.', flush=True)
+        return
+    args.out.mkdir(parents=True, exist_ok=args.resume)
+    with (args.out / 'pipeline.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        identity = args.out / 'inputs.json'
+        if identity.exists() and json.loads(identity.read_text()) != inputs:
+            raise ValueError('Cannot resume with different input data or initialization')
+        identity.write_text(json.dumps(inputs, indent=2) + '\n')
+        for name in ('completed', 'logs'):
+            (args.out / name).mkdir(exist_ok=True)
+        # Fold jobs sharing a device run sequentially; different devices may run in parallel.
+        def teachers(gpu):
+            for job in jobs[:6]:
+                if job['gpu'] == gpu:
+                    run_step(job, args.out, args.resume)
+        with ThreadPoolExecutor(max_workers=len(args.gpus)) as pool:
+            list(pool.map(teachers, args.gpus))
+        for job in jobs[6:]:
+            if job['name'] == 'student':
+                student_manifests(args.manifests, args.out)
+            run_step(job, args.out, args.resume)
+        shutil.copyfile(args.out / 'student/epoch32.pt', args.out / 'final/model.pt')
+        print(f'Complete. Inference checkpoint and calibration: {args.out / "final"}', flush=True)
+
+
+if __name__ == '__main__':
+    main()
