@@ -16,6 +16,7 @@ from .validate import DEFAULT_CSV, check_disjoint, validation_rows
 
 
 def candidates(plan):
+    """Validate a named comparison plan and resolve every variant explicitly."""
     if (not isinstance(plan, dict) or set(plan) != {"defaults", "variants"}
             or not isinstance(plan["defaults"], dict)
             or not isinstance(plan["variants"], list) or not plan["variants"]):
@@ -60,6 +61,8 @@ def main():
     training = pd.concat([read_rows(p, args.root)[COLUMNS] for p in files], ignore_index=True)
     check_disjoint(full, training)
     raw = pd.read_csv(args.nb_csv, keep_default_na=False)
+    # Preserve edit-type proportions in both panels instead of letting a small
+    # control split accidentally lose a rare manipulation category.
     strata = raw.edit_type if "edit_type" in raw else None
     tune, control = train_test_split(raw, test_size=.25, random_state=42, stratify=strata)
     # Source identities must stay together even if a custom CSV repeats a scene.

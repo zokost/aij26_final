@@ -18,8 +18,16 @@ from .distillation import DistillationImages, DistillationLoss, target_index
 
 
 def epoch_frame(base, manifests, root, epoch, teacher, fold):
+    """Preserve the fixed data dose while rotating the student's NB examples.
+
+    Student: 19837 stage2 + 1999 NB + 1999 paired clean images.
+    NB teacher: the extra list includes a second copy of stage2, 6462 edited
+    NB images and flags controlling which clean companions to append.
+    """
     path = manifests / (f"teacher_extra{fold}.csv" if teacher else f"epoch{epoch:02d}.csv")
     extra = read_rows(path, root)
+    # no_src=1 rows already belong to the stage2 mixture; only NB rows need
+    # their original image appended with an empty target.
     clean = extra[extra.no_src != 1] if "no_src" in extra else extra
     frame = pd.concat([base, extra[COLUMNS], companions(clean)], ignore_index=True)
     expected = 52598 if teacher else 23835
@@ -54,6 +62,8 @@ def main():
         parser.error("Checkpoint initialization requires --initial")
     if pretrained and args.initial is not None:
         parser.error("ImageNet initialization must not also supply --initial")
+    # Stop at the selected epoch without shortening the original LR schedule:
+    # NC17 uses epoch32 of a 40-epoch cosine, not a 32-epoch cosine.
     size, batch, workers, schedule, final = (832, 6, 10, 12, 12) if teacher else (
         recipe["img_size"], recipe["batch"], 8, recipe["schedule_epochs"], recipe["final_epoch"])
     if source_teacher:workers=8
@@ -79,6 +89,9 @@ def main():
                                                           if k.startswith("encoder.")}, strict=True)
         del saved
     seed(recipe["seed"])
+    # The two teacher families have different exclusion units: NB fold for
+    # `teacher`, original stage2 source for `stage2-teacher`.
+    # The latter CSV already contains the complete weighted training mixture.
     base_path=args.manifests/(f'teacher_stage2_fold{args.fold}.csv' if source_teacher else 'stage2_train.csv')
     base = read_rows(base_path, args.root)[COLUMNS]
     validation = validation_rows(args.nb_val_csv, args.root)
@@ -90,6 +103,8 @@ def main():
     def rows(epoch):
         return base if source_teacher else epoch_frame(base,args.manifests,args.root,epoch,teacher,args.fold)
     distilling=not teacher and recipe['stage2_kd_weight']>0
+    # This index adds auxiliary stage2 supervision; it never replaces its GT.
+    # NB soft labels are loaded separately through each epoch CSV's gt_path.
     target_path=args.stage2_targets or args.manifests/'stage2_oof_index.csv'
     dataset_kwargs=dict(soft=not teacher,augmentation=recipe['augmentation'],seed_value=recipe['seed'])
     if distilling:dataset_kwargs['teacher_index']=target_index(target_path,args.root,base)
@@ -101,6 +116,8 @@ def main():
     if not teacher and recipe["batch"] == 18 and len(loader) != 1324:
         raise ValueError("Expected 1324 student optimizer steps per epoch")
     net.cuda()
+    # Both encoder and decoder train. The smaller encoder LR preserves the
+    # transferred representation while the new decoder adapts more quickly.
     encoder_ids = {id(p) for p in net.encoder.parameters()}
     optimizer = torch.optim.AdamW([
         {"params": [p for p in net.parameters() if id(p) in encoder_ids], "lr": recipe["lr"] * recipe["encoder_lr_mult"]},
@@ -113,6 +130,8 @@ def main():
     criterion=DistillationLoss(weight=recipe['stage2_kd_weight'],**loss_kwargs) if distilling else Loss(**loss_kwargs)
     history, start = [], 1
     if args.resume:
+        # Restore optimizer, LR and RNG states together; loading weights alone
+        # would not continue the same optimization/sampling trajectory.
         saved = torch.load(args.out / "last.pt", map_location="cpu", weights_only=False)
         if saved["phase"] != args.phase or saved["fold"] != args.fold:
             raise ValueError("Resume recipe differs")
@@ -172,6 +191,8 @@ def main():
                             learning_rates=scheduler.get_last_lr()))
         compact = dict(model=net.state_dict(), cfg=cfg, epoch=epoch, phase=args.phase, fold=args.fold,
                        recipe=None if teacher else recipe)
+        # Compact epoch files serve inference. last.pt additionally contains
+        # optimizer and RNG state and is atomically replaced for safe resume.
         if distilling:compact['distillation']=dict(weight=recipe['stage2_kd_weight'],index_sha256=hashes[target_path.name])
         torch.save(compact, args.out / f"epoch{epoch}.pt")
         compact.update(optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict(), history=history,

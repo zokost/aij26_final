@@ -30,6 +30,8 @@ def main():
     args.out.mkdir(parents=True, exist_ok=args.resume)
     records=[]
     for fold, checkpoint in enumerate(args.teachers):
+        # A row receives exactly one prediction: from the teacher trained
+        # without its fold. This is cross-fitting, not a three-model ensemble.
         predictor = Predictor(checkpoint)
         part = pairs[pairs.fold == fold]
         batch=8 if args.kind=='nb' else 4
@@ -58,6 +60,8 @@ def main():
                 chunk=chunk.loc[pending]
                 if chunk.empty:continue
             if args.kind=='stage2':
+                # Stage2 keeps native float16 logits. The student converts them
+                # to probabilities in float32 alongside the unchanged hard GT.
                 images=[];shapes=[]
                 from common import MEAN, STD
                 for path in chunk.chng_img_path:
@@ -79,6 +83,8 @@ def main():
                 continue
             probabilities=predictor([args.root/path for path in chunk.chng_img_path])
             for row, probability in zip(chunk.itertuples(), probabilities):
+                # NB follows the original compact target format: quantized
+                # probabilities, not a binary thresholded teacher mask.
                 probability = probability.astype(np.float32)
                 probability[probability < .02] = 0
                 path = args.out / f"{int(row.pair_id)}.png"

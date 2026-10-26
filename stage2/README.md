@@ -151,6 +151,22 @@ Batch1 меняет1265 пикселей из1.432млрд относитель�
 
 [Ноутбук](eda_comparisons.ipynb) содержит сохранённый EDA, методологию и сравнения.
 Таблицы, NB-список, конфигурация поиска и зависимости отчёта — в `assets/`.
+
+| Часть исследования | Где смотреть |
+|---|---|
+| EDA: типы правок, площади масок, ограничения разметки | [eda_comparisons.ipynb](eda_comparisons.ipynb) |
+| История рецептов и public LB | [assets/report_experiments.csv](assets/report_experiments.csv) |
+| B1/B2 с общим декодером, учитель и студенты | [assets/model_comparisons.csv](assets/model_comparisons.csv) |
+| Лосс для малых правок и чистых кадров | [../common.py](../common.py), [distillation.py](distillation.py) |
+| Аугментации и профили исследования | [runtime.py](runtime.py): итоговый `minimal`, дополнительный `forensic` |
+| Запускаемый план сравнения архитектур и гиперпараметров | [search.py](search.py), [assets/search_space.json](assets/search_space.json) |
+
+В обеих таблицах NB-метрики относятся к **сырым картам при0.75**, без калибратора.
+В `report_experiments.csv` столбец `threshold` означает базовый порог посылки;
+public LB относится к полному инференсу этой посылки. Поэтому одинаковые
+NB-значения №117/№121 не означают одинаковую калибровку. Сравнение учителя
+и студента не является чистой абляцией архитектуры: различаются данные и цели.
+
 Для запуска ноутбука: `pip install -r stage2/assets/requirements-report.txt`.
 Проверка плана9 вариантов без обучения:
 

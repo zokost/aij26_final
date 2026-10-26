@@ -13,6 +13,7 @@ DEFAULT_CSV = Path(__file__).parent / "assets/nb_validation.csv"
 
 
 def validation_rows(csv, root):
+    """Read positive NB pairs; their clean originals form the negative panel."""
     frame = read_rows(csv, root)
     if frame.empty or not frame[COLUMNS].astype(bool).all().all():
         raise ValueError("NB validation requires nonempty image, original and mask paths")
@@ -59,6 +60,8 @@ def evaluate_nb(net, frame, size, threshold=.75, batch_size=4):
                 if mask.shape != edit.shape or not np.isin(mask, [0, 255]).all() or not mask.any():
                     raise ValueError(f"Expected nonempty native-size binary NB mask: {row.gt_path}")
                 target, predicted = mask > 127, edit >= threshold
+                # Average Dice per edited image. Clean originals contribute to
+                # FPR only; even a nonempty mask is not an alarm below1% area.
                 dice.append(float(2 * (predicted & target).sum() / (predicted.sum() + target.sum())))
                 alarms.append(bool(int((original >= threshold).sum()) >= .01 * original.size))
     finally:

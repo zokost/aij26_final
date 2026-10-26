@@ -18,6 +18,8 @@ def main():
             raise ValueError("Supply finetuning epochs 1, 2, 3, 4, 5 in order")
         state = checkpoint["model"]
         if average is None:
+            # Accumulate parameters and floating buffers in FP64. Integer
+            # counters cannot be averaged; keep their last-epoch values.
             average = {k: torch.zeros_like(v, dtype=torch.float64) if v.is_floating_point() else v.clone()
                        for k, v in state.items()}
         if set(state) != set(average):

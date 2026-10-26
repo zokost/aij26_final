@@ -52,6 +52,7 @@ class Loss(torch.nn.Module):
         bce = (bce_map * weights).sum() / weights.sum() if self.positive_balance else bce_map.mean()
         probability = logits.sigmoid()
         positive = target.sum(dims) > 0
+        # Keep a differentiable zero when a batch contains no edited images.
         positive_loss = logits.sum() * 0.
         if bool(positive.any()):
             tp = (probability * target).sum(dims)[positive]
@@ -63,6 +64,10 @@ class Loss(torch.nn.Module):
             else:
                 positive_loss = 1 - ((tp + 1e-7) /
                                      (tp + (1 - self.beta) * fp + self.beta * fn + 1e-7)).mean()
+        # On clean frames, suppress predicted area directly instead of dividing
+        # an overlap metric by an empty reference mask.
         negative_loss = probability.mean(dims)[~positive].mean() if bool((~positive).any()) else logits.sum() * 0.
         fraction = positive.float().mean()
+        # Average overlap/area terms per image; large masks must not receive
+        # extra weight merely because they contain more positive pixels.
         return .5 * bce + .5 * (fraction * positive_loss + (1 - fraction) * negative_loss)

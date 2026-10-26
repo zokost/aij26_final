@@ -20,6 +20,7 @@ COLUMNS = ["orgl_img_path", "chng_img_path", "gt_path"]
 
 
 def model(teacher=False, encoder="mit_b2", decoder_channels=320, pretrained=False):
+    """Teachers are training-only; final inference uses the smaller student."""
     if teacher:
         return smp.UPerNet(encoder_name="tu-convnext_large.dinov3_lvd1689m",
                            encoder_weights=None, in_channels=3, classes=1)
@@ -35,15 +36,23 @@ def read_rows(path, root):
 
 
 def companions(frame):
+    """Pair edited NB examples with genuine clean negatives and empty masks."""
     return pd.DataFrame(dict(orgl_img_path=frame.orgl_img_path,
                              chng_img_path=frame.orgl_img_path, gt_path=""))
 
 
 class Images(Dataset):
+    """Load native RGB/targets and apply synchronized segmentation augmentation.
+
+    soft=True preserves fractional NB probabilities; official binary PNGs
+    remain 0/1. A missing mask path denotes a genuine clean image.
+    """
     def __init__(self, frame, size, soft, augmentation="minimal", seed_value=42):
         self.frame, self.soft = frame.reset_index(drop=True), soft
         if augmentation not in ("minimal", "forensic"):
             raise ValueError(augmentation)
+        # The final recipe uses squish resize, mild flips and JPEG. Resizing
+        # happens before the crop, so this crop does not implement positive zoom.
         operations = [
             A.Resize(size, size, interpolation=cv2.INTER_AREA),
             A.PadIfNeeded(size, size, position="top_left", border_mode=cv2.BORDER_CONSTANT,
@@ -51,6 +60,7 @@ class Images(Dataset):
             A.HorizontalFlip(p=.5), A.VerticalFlip(p=.2),
             A.ImageCompression(quality_range=(90, 100), p=.2)]
         if augmentation == "forensic":
+            # Optional research profile; it is NOT enabled for submission121.
             # Acquisition/redistribution perturbations: resize, blur and recompression.
             # Photometric operations change the image only; geometric transforms
             # apply the same mapping to image and fractional segmentation target.
@@ -84,6 +94,7 @@ class Images(Dataset):
 
 
 class Predictor:
+    """Rebuild checkpoint architecture and use deterministic FP32 evaluation."""
     def __init__(self, checkpoint):
         seed()
         torch.set_num_threads(4)
@@ -117,5 +128,7 @@ def probabilities(net, paths, size):
         image = (image.astype(np.float32) / 255. - mean) / std
         images.append(torch.from_numpy(image.transpose(2, 0, 1)))
     logits = net(torch.stack(images).to(next(net.parameters()).device, non_blocking=True))
+    # Restore logits before sigmoid/thresholding. Interpolating a binary mask
+    # instead would lose small structures and change native-resolution scores.
     return [F.interpolate(logits[i:i + 1].float(), shape, mode="bilinear", align_corners=False)
             .sigmoid()[0, 0].cpu().numpy() for i, shape in enumerate(sizes)]

@@ -36,6 +36,8 @@ def frames(root, val_fraction=.03):
     groups = np.where(~frame.orgl_img_path.isin(["", "nan"]), frame.orgl_img_path,
                       np.where(~frame.gt_path.isin(["", "nan"]), frame.gt_path,
                                "solo_" + frame.index.astype(str)))
+    # Keep a clean source and all of its edits on the same side of the split;
+    # a row-wise split could validate on another version of a training scene.
     train, val = next(GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=42).split(frame, groups=groups))
     return frame.iloc[train].copy(), frame.iloc[val].copy()
 

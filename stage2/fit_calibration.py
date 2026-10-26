@@ -100,9 +100,14 @@ def fit_policy(data, entries):
     transform = dict(scaler=scaler, pca=pca)
     x = np.column_stack([data['handcrafted'], pca.transform(scaler.transform(data['encoder']))])
     base_index = len(CANDIDATES) - 1
+    # Regress improvement over the baseline, not the absolute Dice. The base
+    # candidate has exactly zero gain and serves as the fallback action.
     target = data['dice'] - data['dice'][:, base_index:base_index+1]
     xs, ys, weights, counts = [], [], [], {}
     for source in ('NB', 'stage2'):
+        # Trees only act on positive images already passing the area guard.
+        # Fit each source with total weight0.5 to prevent the larger pool from
+        # dominating; clean controls are retained for reporting FPR separately.
         eligible = (fit & entries.source.eq(source).to_numpy() & entries.positive.to_numpy()
                     & (data['area'][:, base_index] >= .01 * data['pixels']))
         count = int(eligible.sum())
@@ -114,6 +119,8 @@ def fit_policy(data, entries):
     model = ExtraTreesRegressor(n_estimators=32, max_depth=5, min_samples_leaf=64,
                                random_state=45, bootstrap=False, n_jobs=4)
     model.fit(np.concatenate(xs), np.concatenate(ys), sample_weight=np.concatenate(weights))
+    # Apply the frozen decision rule to control rows after fitting is complete.
+    # These metrics do not feed back into the scaler, PCA or tree parameters.
     choice = choose_thresholds(model, x, data['area'][:, base_index], data['pixels'])
     indices = np.searchsorted(CANDIDATES, choice)
     controls = {}
@@ -146,6 +153,7 @@ def main():
         raise ValueError('Expected unique NB/stage2 entries with fixed fit/control partitions')
     args.out.mkdir(parents=True, exist_ok=True)
     identity = dict(checkpoint_sha256=digest(args.checkpoint), entries_sha256=digest(args.entries))
+    # Feature caches are valid only for the exact checkpoint and ordered CSV.
     cache, meta = args.out / 'features.npz', args.out / 'features.json'
     if cache.exists() and meta.exists() and json.loads(meta.read_text()) == identity:
         with np.load(cache, allow_pickle=False) as saved:

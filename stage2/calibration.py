@@ -19,12 +19,20 @@ from common import MEAN,STD
 from .runtime import Predictor
 from .calibration_features import (WithEncoderROIs, FEATURE_THRESHOLDS, map_features,
                                    map_from_counts, prepare_rgb, selected_handcrafted)
+# Strong float64 thresholds preserve the original NumPy comparison semantics
+# for float32 maps, including pixels lying very close to a cutoff.
 BASE=np.float64(.675)
 CANDIDATES=np.asarray([.5,.6,.65,.675])
 
 
 def choose_thresholds(model,features,base_areas,pixel_counts):
-    """Expand only masks already at or above the official1% alarm boundary."""
+    """Choose predicted Dice gain without adding image-level false alarms.
+
+    Every candidate is at or below BASE. A sub-1% base mask is frozen;
+    otherwise lowering the threshold can improve coverage without changing
+    whether the frame crosses the official >=1% alarm boundary.
+    This preserves the baseline alarm count, not necessarily the Dice score.
+    """
     gains=model.predict(features)
     choice=gains.argmax(1)
     thresholds=CANDIDATES[choice].copy()
@@ -34,6 +42,12 @@ def choose_thresholds(model,features,base_areas,pixel_counts):
 
 
 class CalibratedPredictor:
+    """One student forward plus a checkpoint-compatible, frozen tree policy.
+
+    predict_many keeps the submitted batch4 arithmetic. predict uses an
+    optional single-image CUDA Graph and computes only tree-referenced features.
+    Changing batch/compilation can change floating-point rounding.
+    """
     def __init__(self,checkpoint,calibration,graph=True,compile_net=False,opencv_threads=4):
         cv2.setNumThreads(1);threadpool_limits(limits=1)
         predictor=Predictor(checkpoint)
@@ -50,6 +64,8 @@ class CalibratedPredictor:
         expected_policy='0bf2ba074b3609aefea2eba383ab512f5d635311315c76a79e3b08472023de25'
         expected_transform='fc865212594a3e98eb3e9b1465d75225782a422bebc636f4a7f99ebc949b9758'
         metadata=folder/'calibration.json'
+        # Retraining produces its own policy/PCA and binds them to that exact
+        # checkpoint. Original inference instead requires the submitted hashes.
         if metadata.exists():
             from .fit_calibration import digest
             trained=json.loads(metadata.read_text())
@@ -65,6 +81,7 @@ class CalibratedPredictor:
             raise ValueError('Expected matching submission121 scaler/PCA')
         self.policy=pickle.loads(policy_bytes)
         self.transform=pickle.loads(transform_bytes)
+        # Small tree ensembles are faster without thread-pool dispatch here.
         self.policy['model'].n_jobs=1
         self.used=set(int(i) for tree in self.policy['model'].estimators_ for i in tree.tree_.feature if i>=0)
         self.cuts=torch.tensor([.02,.1,.25,.5,.75,.9,.98,*FEATURE_THRESHOLDS.tolist()],dtype=torch.float64,device='cuda')
@@ -111,6 +128,8 @@ class CalibratedPredictor:
             masks=[]
             for i,(image,p) in enumerate(zip(images,probabilities)):
                 base=p>=BASE
+                # Besides avoiding new alarms, the guard skips unnecessary
+                # image-region feature extraction for already-small masks.
                 if base.sum()<.01*p.size:
                     masks.append(base);continue
                 x=np.concatenate([map_features(p),*selected_handcrafted(image,p,self.used),embedding[i]])[None]
@@ -129,6 +148,8 @@ class CalibratedPredictor:
 
     @torch.inference_mode()
     def _predict(self,path,force_full=False):
+        # force_full is for inspecting features even when the alarm guard exits;
+        # it does not disable the guard inside choose_thresholds.
         timings={};torch.cuda.synchronize();started=last=time.perf_counter()
         def tick(name):
             nonlocal last

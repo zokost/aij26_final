@@ -35,6 +35,8 @@ def main():
     torch.set_num_threads(4)
     seed()
     base = args.phase == "base"
+    # These are two distinct schedules. Stopping early keeps the corresponding
+    # original cosine horizon rather than rescaling LR to the stopping epoch.
     schedule_epochs, final_epoch, batch, lr = (200, 161, 6, 3e-4) if base else (10, 5, 40, 3e-5)
     stop = args.stop_epoch or final_epoch
     if not 1 <= stop <= schedule_epochs:

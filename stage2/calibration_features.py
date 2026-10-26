@@ -10,6 +10,7 @@ def mean(values):
     return float(values.mean()) if values.size else 0.
 
 def component_features(mask):
+    """Describe mask topology, dominant component, compactness and border contact."""
     n, labels, sizes, centroids=cv2.connectedComponentsWithStats(mask.astype(np.uint8),connectivity=8)
     areas=sizes[1:,cv2.CC_STAT_AREA]
     count=len(areas);total=int(mask.sum());frame=mask.size
@@ -51,6 +52,7 @@ def map_from_counts(p,counts):
     return np.asarray([*hist,*areas,p.max(),p.mean(),*spatial,np.log(p.shape[0]),np.log(p.shape[1])],np.float64)
 
 def prepare_rgb(image):
+    """Compute cheap appearance channels on a 256px aspect-preserving view."""
     h,w=image.shape[:2];scale=256/max(h,w)
     shape=(max(1,int(round(w*scale))),max(1,int(round(h*scale))))
     im=cv2.resize(image,shape,interpolation=cv2.INTER_AREA).astype(np.float32)/255.
@@ -67,6 +69,8 @@ def selected_handcrafted(image,probability,used,prepared=None):
     h,w=probability.shape;scale=256/max(h,w)
     shape=(max(1,int(round(w*scale))),max(1,int(round(h*scale))))
     q=cv2.resize(probability,shape,interpolation=cv2.INTER_AREA)
+    # Fixed feature layout: probability22 | geometry49 | boundary54 | RGB119 |
+    # encoder PCA32. Offsets below must match the fitted tree feature indices.
     geometry=[];largest=[];centers=[]
     for t in [.5,.75,.9,.95]:
         row,m,c=component_features(q>=t);geometry.extend(row);largest.append(m);centers.append(c)
@@ -76,6 +80,9 @@ def selected_handcrafted(image,probability,used,prepared=None):
     kernel=np.ones((7,7),np.uint8)
     gx=cv2.Sobel(q,cv2.CV_32F,1,0,ksize=3);gy=cv2.Sobel(q,cv2.CV_32F,0,1,ksize=3);gradient=np.sqrt(gx*gx+gy*gy)
     boundary=np.zeros(54,np.float32);base_regions=None;base_band=None
+    # Compare confident interiors, inner/outer boundary bands and background.
+    # Appearance differences near a boundary help distinguish plausible edits
+    # from over-segmentation without running another image model.
     for index,t in enumerate([.75,.9]):
         mask=(q>=t).astype(np.uint8);dilated=cv2.dilate(mask,kernel)>0;eroded=cv2.erode(mask,kernel)>0
         regions=[eroded,(mask>0)&~eroded,dilated&~(mask>0),~dilated];band=dilated&~eroded
@@ -120,7 +127,12 @@ def handcrafted(image,probability):
     return selected_handcrafted(image,probability,set(range(276)))
 
 class WithEncoderROIs(torch.nn.Module):
-    """Reuse the four MiT feature maps; no second encoder forward."""
+    """Reuse four encoder scales in mask/boundary/background regions.
+
+    Pooling yields 3072 values per image; the fitted scaler/PCA reduces them
+    to32. The .75 feature-region cutoff is fixed independently of the policy's
+    .675 base threshold. No second encoder or teacher runs at inference.
+    """
     def __init__(self,net):
         super().__init__()
         self.net=net
@@ -128,6 +140,7 @@ class WithEncoderROIs(torch.nn.Module):
         self.handle=net.encoder.register_forward_hook(self.capture)
 
     def capture(self,module,inputs,outputs):
+        # SMP exposes the four MiT stages as the last four encoder outputs.
         self.maps=outputs[-4:]
 
     def forward(self,x):
@@ -139,6 +152,8 @@ class WithEncoderROIs(torch.nn.Module):
         pooled=[]
         for feature in self.maps:
             weight=F.interpolate(regions,size=feature.shape[-2:],mode='area')
+            # Area-resampled region weights retain narrow structures on coarse
+            # feature maps. Empty regions divide by a clamped denominator.
             denominator=weight.sum((2,3)).clamp_min(1e-6)
             value=torch.einsum('bchw,brhw->brc',feature,weight)/denominator[:,:,None]
             pooled.append(value.flatten(1))

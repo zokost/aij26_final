@@ -3,6 +3,8 @@ import json
 import math
 
 
+# This is the final student's recipe. Research variants opt in through JSON;
+# adding an experimental augmentation or loss must not silently change NC17.
 DEFAULT = dict(encoder="mit_b2", decoder_channels=320, img_size=640, batch=18,
                lr=1e-4, encoder_lr_mult=.1, schedule_epochs=40, final_epoch=32,
                seed=42, tversky_beta=.7, positive_balance=True,
@@ -10,6 +12,7 @@ DEFAULT = dict(encoder="mit_b2", decoder_channels=320, img_size=640, batch=18,
 
 
 def resolve(overrides=None):
+    """Reject unknown keys and incompatible settings before allocating a GPU."""
     overrides = {} if overrides is None else overrides
     if not isinstance(overrides, dict) or set(overrides) - set(DEFAULT):
         raise ValueError("Unknown recipe keys or non-object recipe")

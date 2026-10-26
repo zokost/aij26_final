@@ -32,9 +32,12 @@ def main():
         raise ValueError('Expected a nonempty CSV with unique img_path values')
     args.out.mkdir(parents=True,exist_ok=False)
     if not args.benchmark_only:(args.out/'predictions').mkdir()
+    # batch4 is the submitted arithmetic; batch1/compile are explicit optional
+    # acceleration modes rather than silent changes to the final recipe.
     predictor=CalibratedPredictor(args.checkpoint,args.calibration,graph=args.batch_size==1,
         compile_net=args.compile,opencv_threads=args.threads)
     warm=frame.img_path.astype(str).tolist()[:args.batch_size]
+    # Startup and these warmup calls are excluded from steady-state timing.
     for _ in range(5):
         if args.batch_size==1:predictor.predict(args.root/warm[0])
         else:predictor.predict_many([args.root/p for p in warm])
@@ -49,11 +52,14 @@ def main():
             else:
                 torch.cuda.synchronize();start=time.perf_counter()
                 masks=predictor.predict_many([args.root/p for p in chunk]);torch.cuda.synchronize()
+                # This is amortized batch wall time, not single-request latency.
                 per_image=(time.perf_counter()-start)*1000/len(chunk)
                 measurements=[dict(img_path=p,total=per_image) for p in chunk]
             timings.extend(measurements)
             for i,(path,mask) in enumerate(zip(chunk,masks),offset):
                 if not args.benchmark_only:
+                    # Unique sequential filenames avoid collisions between
+                    # input directories while preserving CSV row order.
                     relative=f'predictions/{i:06d}.png'
                     Image.fromarray(mask.astype(np.uint8)*255).save(args.out/relative)
                     rows.append((path,relative))
@@ -69,6 +75,8 @@ def main():
     summary['timing_mode']='Single-image wall time' if args.batch_size==1 else 'Batch wall time divided by image count'
     (args.out/'latency.json').write_text(json.dumps(summary,indent=2)+'\n')
     if not args.benchmark_only:
+        # Only CSV and native-size binary masks belong in the submission ZIP;
+        # profiling outputs remain beside the archive for reproducibility.
         submission=pd.DataFrame(rows,columns=['img_path','prediction_path'])
         submission.to_csv(args.out/'submission.csv',index=False)
         with zipfile.ZipFile(args.out/'submission.zip','w',zipfile.ZIP_DEFLATED) as archive:
