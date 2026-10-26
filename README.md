@@ -47,7 +47,7 @@ pip install -r requirements.txt
 ```
 
 Веса `model.pt`, `policy.pkl`, `encoder_transform.pkl` —
-[на Hugging Face](https://huggingface.co/misiskovo/aij26-final-weights/tree/main/weights/121).
+[на Google Drive](https://drive.google.com/drive/folders/11ZCHVWAwsE6Hp0Ny7YkoG6Tqm1R-PoEd?usp=sharing).
 Положите их в `weights/121/`. SHA256 — в [weights.json](weights.json).
 
 ```bash
